@@ -20,43 +20,49 @@ export default function App() {
   const [input, setInput] = useState("");
   const [chat, setChat] = useState([{ who: "bot", msg: "Hola 👋 ¿qué quieres analizar hoy?" }]);
 
-  // Datos reales
+  // Datos reales desde /api/data
   const { ventas, clientes, serieBar, kpis, loading, err } = useSheetData();
 
-  // Meses disponibles (YYYY-MM)
+  // Meses disponibles (YYYY-MM) con fallback a serieBar.ym
   const mesesDisponibles = useMemo(() => {
     const set = new Set();
-    ventas.forEach((v) => set.add(ymKey(v.fecha)));
-    clientes.forEach((c) => set.add(ymKey(c.fecha)));
-    return Array.from(set).sort();
-  }, [ventas, clientes]);
+    // 1) Meses a partir de las filas (ventas/clientes)
+    ventas.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
+    clientes.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
+    // 2) Fallback: si aún no hay filas, usa la serie del backend
+    if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
+      serieBar.forEach((p) => {
+        if (p.ym) set.add(p.ym);         // backend actualizado
+      });
+    }
+    return Array.from(set).sort();       // ["2025-05","2025-06",...]
+  }, [ventas, clientes, serieBar]);
 
-  // Mes seleccionado
+  // Mes seleccionado (controlado)
   const [mesSel, setMesSel] = useState(null);
 
   // Inicializa al último mes disponible cuando llegan datos
   useEffect(() => {
     if (!mesSel && mesesDisponibles.length) {
-      setMesSel(mesesDisponibles.at(-1));
+      setMesSel(mesesDisponibles.at(-1)); // último (más reciente)
     }
   }, [mesesDisponibles, mesSel]);
 
   const mesActivo = mesSel || (mesesDisponibles.length ? mesesDisponibles.at(-1) : null);
 
-  // Distribución por canal del mes activo (Suma de VENTAS por canal)
-const pieData = useMemo(() => {
-  if (!mesActivo || !ventas.length) return [];
-  const map = {};
-  ventas.forEach((r) => {
-    if (ymKey(r.fecha) === mesActivo) {
-      const canal = r.canal || "N/D";
-      const v = Number(r.ventas) || 0;      // <- suma ventas
-      map[canal] = (map[canal] || 0) + v;
-    }
-  });
-  return Object.entries(map).map(([name, value]) => ({ name, value }));
-}, [ventas, mesActivo]);
-
+  // Distribución por canal del mes activo (suma de VENTAS por canal)
+  const pieData = useMemo(() => {
+    if (!mesActivo || !ventas.length) return [];
+    const map = {};
+    ventas.forEach((r) => {
+      if (r.fecha && ymKey(r.fecha) === mesActivo) {
+        const canal = r.canal || "N/D";
+        const v = Number(r.ventas) || 0;  // suma ventas
+        map[canal] = (map[canal] || 0) + v;
+      }
+    });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  }, [ventas, mesActivo]);
 
   const enviar = () => {
     if (!input.trim()) return;
@@ -121,12 +127,15 @@ const pieData = useMemo(() => {
                            bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
                 value={mesActivo || ""}
                 onChange={(e) => setMesSel(e.target.value)}
+                disabled={!mesesDisponibles.length}
               >
-                {mesesDisponibles.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
+                {mesesDisponibles.length === 0 ? (
+                  <option value="">Cargando meses…</option>
+                ) : (
+                  mesesDisponibles.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -207,8 +216,7 @@ const pieData = useMemo(() => {
               title={`Distribución por canal — ${mesActivo || "—"}`}
               footer="Cuenta de operaciones por canal en el mes seleccionado."
             >
-              {/* clave para remontar el pie cuando cambie el mes */}
-              <ChannelPie key={mesActivo} data={pieData} loading={loading} error={err} />
+              <ChannelPie key={mesActivo || "none"} data={pieData} loading={loading} error={err} />
             </ChartCard>
 
             {/* Interpretación */}
