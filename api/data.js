@@ -1,4 +1,4 @@
-// api/data.js  (Node runtime)
+// api/data.js — Vercel Serverless Function
 export default async function handler(req, res) {
   try {
     const VENTAS_URL = process.env.VENTAS_URL;
@@ -13,64 +13,62 @@ export default async function handler(req, res) {
     }
     const [csvV, csvC] = await Promise.all([rv.text(), rc.text()]);
 
-    // Parse CSV simple (sin dependencias) -> split por líneas
+    // --- helpers ---
+    const norm = (s="") =>
+      s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"_");
+    const toNum = (v)=>{ if(v==null||v==="")return 0; const n=Number(String(v).replace(/\./g,"").replace(",","."));
+      return Number.isFinite(n)?n:0; };
+    const toDate = (v)=>{ const d=new Date(v); return isNaN(d)?null:d; };
+    const ym = (d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     const parseCsv = (txt) => {
       const lines = txt.trim().split(/\r?\n/);
-      const headers = lines[0].split(",").map(h => norm(h));
+      const headers = lines[0].split(",").map(norm);
       return lines.slice(1).map(line => {
-        const cols = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/); // respeta comas dentro de comillas
-        const obj = {};
-        headers.forEach((h, i) => obj[h] = (cols[i] ?? "").replace(/^"|"$/g,""));
+        const cols = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/); // comas dentro de comillas OK
+        const obj = {}; headers.forEach((h,i)=> obj[h] = (cols[i] ?? "").replace(/^"|"$/g,""));
         return obj;
       });
     };
 
-    const norm = (s="") =>
-      s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"_");
-    const toNum = (v) => {
-      if (v===null||v===undefined||v==="") return 0;
-      const n = Number(String(v).replace(/\./g,"").replace(",","."));
-      return Number.isFinite(n) ? n : 0;
-    };
-    const toDate = (v) => { const d=new Date(v); return isNaN(d)?null:d; };
-    const ym = (d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    // --- parse ---
+    const vRaw = parseCsv(csvV);
+    const cRaw = parseCsv(csvC);
 
-    const vRowsRaw = parseCsv(csvV);
-    const cRowsRaw = parseCsv(csvC);
-
-    const ventas = vRowsRaw.map(r => ({
+    const ventasRows = vRaw.map(r => ({
       fecha: toDate(r.fecha || r.date),
       ventas: toNum(r.ventas || r.ingresos),
       gastos: toNum(r.gastos || r.costes),
       canal: (r.canal || r.channel || "N/D").trim(),
     })).filter(r => r.fecha);
 
-    const clientes = cRowsRaw.map(r => ({
+    const clientesRows = cRaw.map(r => ({
       fecha: toDate(r.fecha || r.date),
       nuevos_clientes: toNum(r.nuevos_clientes || r.nuevos || r.clientes_nuevos),
       ticket_medio: toNum(r.ticket_medio || r.ticket),
     })).filter(r => r.fecha);
 
-    // Aggregations
+    // --- agregados para KPIs / barras ---
     const ventasByM = {};
-    ventas.forEach(r => {
-      const key = ym(r.fecha);
-      (ventasByM[key] ||= { ventas:0, gastos:0 });
-      ventasByM[key].ventas += r.ventas;
-      ventasByM[key].gastos += r.gastos;
+    ventasRows.forEach(r => {
+      const k = ym(r.fecha);
+      (ventasByM[k] ||= { ventas:0, gastos:0 });
+      ventasByM[k].ventas += r.ventas;
+      ventasByM[k].gastos += r.gastos;
     });
 
     const clientesByM = {};
-    clientes.forEach(r => {
-      const key = ym(r.fecha);
-      (clientesByM[key] ||= { nuevos:0, ticketSum:0, n:0 });
-      clientesByM[key].nuevos += r.nuevos_clientes;
-      clientesByM[key].ticketSum += r.ticket_medio;
-      clientesByM[key].n += 1;
+    clientesRows.forEach(r => {
+      const k = ym(r.fecha);
+      (clientesByM[k] ||= { nuevos:0, ticketSum:0, n:0 });
+      clientesByM[k].nuevos += r.nuevos_clientes;
+      clientesByM[k].ticketSum += r.ticket_medio;
+      clientesByM[k].n += 1;
     });
 
     const months = Object.keys(ventasByM).sort();
-    const last = months.at(-1); const prev = months.at(-2);
+    const last = months.at(-1);
+    const prev = months.at(-2) ?? last;
+
     const vNow = ventasByM[last]?.ventas ?? 0;
     const vPrev = ventasByM[prev]?.ventas ?? 0;
     const cNow = clientesByM[last]?.nuevos ?? 0;
@@ -88,18 +86,23 @@ export default async function handler(req, res) {
     };
 
     const serieBar = Object.entries(ventasByM)
-  .sort(([a],[b]) => a.localeCompare(b))
-  .slice(-8)
-  .map(([key, v]) => ({
-    ym: key,                // <-- "2025-08"
-    mes: key.slice(5),      // "08" (para eje X)
-    ventas: v.ventas,
-    gastos: v.gastos,
-  }));
+      .sort(([a],[b]) => a.localeCompare(b))
+      .slice(-8)
+      .map(([key, v]) => ({
+        ym: key,             // YYYY-MM (para el selector)
+        mes: key.slice(5),   // "01".."12" (para el eje X)
+        ventas: v.ventas,
+        gastos: v.gastos,
+      }));
+
+    // serializa fechas a ISO
+    const toIso = (d)=> d?.toISOString?.() ?? d;
+    const ventas = ventasRows.map(r => ({ ...r, fecha: toIso(r.fecha) }));
+    const clientes = clientesRows.map(r => ({ ...r, fecha: toIso(r.fecha) }));
 
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600"); // cache 5 min
-    return res.status(200).json({ kpis, serieBar, updatedAt: new Date().toISOString() });
+    res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
+    return res.status(200).json({ kpis, serieBar, ventas, clientes, updatedAt: new Date().toISOString() });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
   }
