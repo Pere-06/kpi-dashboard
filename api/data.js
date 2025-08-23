@@ -88,9 +88,14 @@ export default async function handler(req, res) {
     };
 
     const serieBar = Object.entries(ventasByM)
-      .sort(([a],[b]) => a.localeCompare(b))
-      .slice(-8)
-      .map(([mes, v]) => ({ mes: mes.slice(5), ventas: v.ventas, gastos: v.gastos }));
+  .sort(([a],[b]) => a.localeCompare(b))
+  .slice(-8)
+  .map(([key, v]) => ({
+    ym: key,                // <-- "2025-08"
+    mes: key.slice(5),      // "08" (para eje X)
+    ventas: v.ventas,
+    gastos: v.gastos,
+  }));
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600"); // cache 5 min
