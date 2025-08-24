@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useSheetData } from "./hooks/useSheetData";
 import {
   ResponsiveContainer,
@@ -50,11 +50,6 @@ type UseSheetDataReturn = {
   err: Error | string | null;
 };
 
-/* Si tu hook ya exporta tipos, puedes importarlos y borrar estos.
-   Ej:
-   import type { VentasRow, ClientesRow, SerieBarPoint, Kpis } from "@/types/..."
-*/
-
 /* =========================
    Utils con tipos
    ========================= */
@@ -66,7 +61,7 @@ const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
 export default function App() {
-  // Dark mode (asumo que tu hook devuelve { theme, toggle })
+  // Dark mode
   const { theme, toggle } = useDarkMode() as { theme: "dark" | "light"; toggle: () => void };
 
   const [input, setInput] = useState<string>("");
@@ -74,7 +69,14 @@ export default function App() {
     { who: "bot", msg: "Hola 👋 ¿qué quieres analizar hoy?" },
   ]);
 
-  // Datos reales desde /api/data (añado tipo explícito al destructuring)
+  // Auto‑scroll del chat
+  const chatRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = chatRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat]);
+
+  // Datos reales desde /api/data
   const {
     ventas,
     clientes,
@@ -84,16 +86,13 @@ export default function App() {
     err,
   } = useSheetData() as UseSheetDataReturn;
 
-  // Meses disponibles (YYYY-MM) con fallback a serieBar.ym
+  // Meses disponibles (YYYY-MM) con fallback a serieBar.mes
   const mesesDisponibles = useMemo<string[]>(() => {
     const set = new Set<string>();
-    // 1) Meses a partir de las filas (ventas/clientes)
     ventas.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
     clientes.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
-    // 2) Fallback: si aún no hay filas, usa la serie del backend
     if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
       serieBar.forEach((p) => {
-        // si tu backend manda `ym`, puedes mapearlo aquí
         if (p.mes) set.add(p.mes);
       });
     }
@@ -147,6 +146,8 @@ export default function App() {
               onClick={toggle}
               className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900"
               title="Cambiar tema"
+              aria-pressed={theme === "dark"}
+              aria-label="Cambiar tema claro/oscuro"
             >
               {theme === "dark" ? "☀️ Claro" : "🌙 Oscuro"}
             </button>
@@ -157,25 +158,33 @@ export default function App() {
 
       <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
         {/* Sidebar/chat */}
-        <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h:[calc(100vh-56px)] flex flex-col">
+        <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h-[calc(100vh-56px)] flex flex-col">
           <div className="p-4">
             <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">Chat de análisis</h2>
 
             {/* Input + botón */}
             <div className="mt-3 flex gap-2">
-              <input
-                className="flex-1 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900
+              <textarea
+                className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900
                            px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500
-                           outline-none"
-                placeholder="Escribe tu petición…"
+                           outline-none resize-y"
+                placeholder="Pide un gráfico o un insight… (Enter envía, Shift+Enter = salto)"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && enviar()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    enviar();
+                  }
+                }}
+                aria-label="Mensaje para el chat de análisis"
               />
               <button
                 onClick={enviar}
+                disabled={!input.trim()}
                 className="rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900
-                           px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200"
+                           px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200
+                           disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Enviar
               </button>
@@ -202,7 +211,7 @@ export default function App() {
             </div>
 
             {/* Mensajes del chat */}
-            <div className="mt-4 px-1 space-y-2 overflow-y-auto">
+            <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
               {chat.map((c, i) => (
                 <div
                   key={i}
