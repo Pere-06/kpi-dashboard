@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useSheetData } from "./hooks/useSheetData";
 import {
   ResponsiveContainer,
@@ -9,55 +9,117 @@ import ChartCard from "./components/ChartCard";
 import ChannelPie from "./components/ChannelPie";
 import { useDarkMode } from "./hooks/useDarkMode";
 
-const euro = (n = 0) =>
+/* =========================
+   Tipos mínimos locales
+   ========================= */
+type ChatMsg = { who: "bot" | "user"; msg: string };
+
+type VentasRow = {
+  fecha?: Date | null;
+  canal?: string | null;
+  ventas?: number | null;
+  gastos?: number | null;
+  mes?: string | null;
+};
+
+type ClientesRow = {
+  fecha?: Date | null;
+};
+
+type SerieBarPoint = {
+  mes: string;
+  ventas: number;
+  gastos: number;
+};
+
+type Kpis = {
+  ventasMes: number;
+  deltaVentas: number;
+  nuevosMes: number;
+  deltaNuevos: number;
+  ticketMedio: number;
+  deltaTicket: number;
+};
+
+type UseSheetDataReturn = {
+  ventas: VentasRow[];
+  clientes: ClientesRow[];
+  serieBar: SerieBarPoint[];
+  kpis: Kpis | null;
+  loading: boolean;
+  err: Error | string | null;
+};
+
+/* Si tu hook ya exporta tipos, puedes importarlos y borrar estos.
+   Ej:
+   import type { VentasRow, ClientesRow, SerieBarPoint, Kpis } from "@/types/..."
+*/
+
+/* =========================
+   Utils con tipos
+   ========================= */
+const euro = (n: number = 0) =>
   n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
-const pct = (n = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
-const ymKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+
+const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
 export default function App() {
-  const { theme, toggle } = useDarkMode();
+  // Dark mode (asumo que tu hook devuelve { theme, toggle })
+  const { theme, toggle } = useDarkMode() as { theme: "dark" | "light"; toggle: () => void };
 
-  const [input, setInput] = useState("");
-  const [chat, setChat] = useState([{ who: "bot", msg: "Hola 👋 ¿qué quieres analizar hoy?" }]);
+  const [input, setInput] = useState<string>("");
+  const [chat, setChat] = useState<ChatMsg[]>([
+    { who: "bot", msg: "Hola 👋 ¿qué quieres analizar hoy?" },
+  ]);
 
-  // Datos reales desde /api/data
-  const { ventas, clientes, serieBar, kpis, loading, err } = useSheetData();
+  // Datos reales desde /api/data (añado tipo explícito al destructuring)
+  const {
+    ventas,
+    clientes,
+    serieBar,
+    kpis,
+    loading,
+    err,
+  } = useSheetData() as UseSheetDataReturn;
 
   // Meses disponibles (YYYY-MM) con fallback a serieBar.ym
-  const mesesDisponibles = useMemo(() => {
-    const set = new Set();
+  const mesesDisponibles = useMemo<string[]>(() => {
+    const set = new Set<string>();
     // 1) Meses a partir de las filas (ventas/clientes)
     ventas.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
     clientes.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
     // 2) Fallback: si aún no hay filas, usa la serie del backend
     if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
       serieBar.forEach((p) => {
-        if (p.ym) set.add(p.ym);         // backend actualizado
+        // si tu backend manda `ym`, puedes mapearlo aquí
+        if (p.mes) set.add(p.mes);
       });
     }
-    return Array.from(set).sort();       // ["2025-05","2025-06",...]
+    return Array.from(set).sort();
   }, [ventas, clientes, serieBar]);
 
   // Mes seleccionado (controlado)
-  const [mesSel, setMesSel] = useState(null);
+  const [mesSel, setMesSel] = useState<string | null>(null);
 
   // Inicializa al último mes disponible cuando llegan datos
   useEffect(() => {
     if (!mesSel && mesesDisponibles.length) {
-      setMesSel(mesesDisponibles.at(-1)); // último (más reciente)
+      setMesSel(mesesDisponibles.at(-1) ?? null); // último (más reciente)
     }
   }, [mesesDisponibles, mesSel]);
 
-  const mesActivo = mesSel || (mesesDisponibles.length ? mesesDisponibles.at(-1) : null);
+  const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
   // Distribución por canal del mes activo (suma de VENTAS por canal)
-  const pieData = useMemo(() => {
+  const pieData = useMemo<{ name: string; value: number }[]>(() => {
     if (!mesActivo || !ventas.length) return [];
-    const map = {};
+    const map: Record<string, number> = {};
     ventas.forEach((r) => {
       if (r.fecha && ymKey(r.fecha) === mesActivo) {
-        const canal = r.canal || "N/D";
-        const v = Number(r.ventas) || 0;  // suma ventas
+        const canal = (r.canal ?? "N/D") as string;
+        const v = Number(r.ventas ?? 0);
         map[canal] = (map[canal] || 0) + v;
       }
     });
@@ -95,7 +157,7 @@ export default function App() {
 
       <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
         {/* Sidebar/chat */}
-        <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h-[calc(100vh-56px)] flex flex-col">
+        <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h:[calc(100vh-56px)] flex flex-col">
           <div className="p-4">
             <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">Chat de análisis</h2>
 
@@ -192,7 +254,7 @@ export default function App() {
                 <div className="h-full grid place-items-center text-sm text-zinc-500">Cargando…</div>
               ) : err ? (
                 <div className="h-full grid place-items-center text-sm text-rose-600">
-                  Error: {String(err.message || err)}
+                  Error: {typeof err === "string" ? err : String(err?.message ?? err)}
                 </div>
               ) : !serieBar.length ? (
                 <div className="h-full grid place-items-center text-sm text-zinc-500">Sin datos.</div>
