@@ -15,6 +15,11 @@ import ChartCard from "./components/ChartCard";
 import ChannelPie from "./components/ChannelPie";
 import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
+import DynamicChart from "./components/DynamicChart";
+import { parsePromptToSpec } from "./ai/parsePrompt";
+import type { ChartSpec } from "./types/chart";
+import { describeSpec } from "./ai/promptHelper";
+
 
 /* =========================
    Tipos mínimos locales
@@ -74,6 +79,9 @@ export default function App() {
     { who: "bot", msg: "Hola 👋 ¿qué quieres analizar hoy?" },
   ]);
 
+  // Gráficos generados por IA (máx. 6)
+  const [generated, setGenerated] = useState<ChartSpec[]>([]);
+
   // Auto‑scroll del chat
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -125,66 +133,94 @@ export default function App() {
   }, [ventas, mesActivo]);
 
   const enviar = () => {
-    if (!input.trim()) return;
+    const text = input.trim();
+    if (!text) return;
+
+    // Chat
     setChat((p) => [
       ...p,
-      { who: "user", msg: input.trim() },
-      { who: "bot", msg: "Actualizado con datos reales ✅" },
+      { who: "user", msg: text },
+      { who: "bot", msg: "Entendido ✅ Generando visualizaciones…" },
     ]);
     setInput("");
+
+    // Intento de gráfico generado por IA (parser simple)
+    const spec = parsePromptToSpec(text);
+    if (spec) {
+      setGenerated((prev) => [spec, ...prev].slice(0, 6)); // hasta 6 gráficos
+    } else {
+      setChat((p) => [
+        ...p,
+        {
+          who: "bot",
+          msg:
+            "No he entendido la petición para un gráfico. Prueba con: “ventas por canal”, “ventas vs gastos últimos 8 meses”, “evolución de ventas últimos 6 meses”, “top 3 canales”.",
+        },
+      ]);
+    }
+  };
+
+  // Tooltip estilizado para el bar chart
+  const tooltipStyle: React.CSSProperties = {
+    backgroundColor: theme === "dark" ? "#18181b" : "#ffffff",
+    borderRadius: 12,
+    border: "1px solid rgba(63,63,70,.4)",
+    color: theme === "dark" ? "#e5e7eb" : "#18181b",
+    fontSize: "0.875rem",
   };
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       {/* Topbar */}
       <header className="sticky top-0 z-40 backdrop-blur bg-white/60 dark:bg-zinc-950/60 border-b border-zinc-200 dark:border-zinc-800 shadow-sm">
-  <div className="mx-auto max-w-7xl h-14 px-4 flex items-center justify-between">
-    {/* Branding */}
-    <div className="flex items-center gap-2">
-      <img src="/vite.svg" alt="Logo" className="h-6 w-6" />
-      <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">MiKPI Dashboard</span>
-    </div>
+        <div className="mx-auto max-w-7xl h-14 px-4 flex items-center justify-between">
+          {/* Branding */}
+          <div className="flex items-center gap-2">
+            <img src="/vite.svg" alt="Logo" className="h-6 w-6" />
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">
+              MiKPI Dashboard
+            </span>
+          </div>
 
-    {/* Actions: theme + auth */}
-    <div className="flex items-center gap-3">
-      {/* Botón tema */}
-      <button
-        onClick={toggle}
-        className="rounded-full p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-        title="Cambiar tema"
-      >
-        {theme === "dark" ? "🌞" : "🌙"}
-      </button>
+          {/* Actions: theme + auth */}
+          <div className="flex items-center gap-3">
+            {/* Botón tema */}
+            <button
+              onClick={toggle}
+              className="rounded-full p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              title="Cambiar tema"
+              aria-label="Cambiar tema"
+            >
+              {theme === "dark" ? "🌞" : "🌙"}
+            </button>
 
-      {/* Clerk Auth */}
-     <SignedIn>
-  <UserButton
-    afterSignOutUrl="/"
-    appearance={{
-      elements: {
-        userButtonPopoverCard:
-          "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
-        userPreview: "text-zinc-100",
-        userButtonPopoverActionButton:
-          "hover:bg-zinc-800 text-zinc-100",
-        userButtonPopoverFooter:
-          "border-t border-zinc-800"
-      }
-    }}
-  />
-</SignedIn>
+            {/* Clerk Auth */}
+            <SignedIn>
+              <UserButton
+                afterSignOutUrl="/"
+                appearance={{
+                  elements: {
+                    userButtonPopoverCard:
+                      "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
+                    userPreview: "text-zinc-100",
+                    userButtonPopoverActionButton:
+                      "hover:bg-zinc-800 text-zinc-100",
+                    userButtonPopoverFooter: "border-t border-zinc-800",
+                  },
+                }}
+              />
+            </SignedIn>
 
-      <SignedOut>
-        <SignInButton mode="modal">
-          <button className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
-            Iniciar sesión
-          </button>
-        </SignInButton>
-      </SignedOut>
-    </div>
-  </div>
-</header>
-
+            <SignedOut>
+              <SignInButton mode="modal">
+                <button className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
+                  Iniciar sesión
+                </button>
+              </SignInButton>
+            </SignedOut>
+          </div>
+        </div>
+      </header>
 
       <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
         {/* Sidebar/chat */}
@@ -206,7 +242,6 @@ export default function App() {
                     e.preventDefault();
                     enviar();
                   }
-                  // Shift+Enter deja pasar salto de línea
                 }}
                 aria-label="Mensaje para el chat de análisis"
               />
@@ -289,7 +324,7 @@ export default function App() {
               />
             </div>
 
-            {/* Gráfico barras */}
+            {/* Gráfico barras (predeterminado) */}
             <ChartCard title="Ventas vs Gastos (últimos 8 meses)">
               {loading ? (
                 <div className="h-full grid place-items-center text-sm text-zinc-500">Cargando…</div>
@@ -302,13 +337,27 @@ export default function App() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={serieBar} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="mes" />
-                    <YAxis />
-                    <Tooltip />
+                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
+                    <XAxis dataKey="mes" stroke="currentColor" />
+                    <YAxis stroke="currentColor" />
+                    <Tooltip contentStyle={tooltipStyle} />
                     <Legend />
-                    <Bar dataKey="gastos" name="gastos" radius={[6, 6, 0, 0]} fill="#22c55e" />
-                    <Bar dataKey="ventas" name="ventas" radius={[6, 6, 0, 0]} fill="#3b82f6" />
+                    <Bar
+                      dataKey="gastos"
+                      name="Gastos"
+                      radius={[6, 6, 0, 0]}
+                      fill={theme === "dark" ? "#22c55e" : "#16a34a"}
+                      isAnimationActive
+                      animationDuration={800}
+                    />
+                    <Bar
+                      dataKey="ventas"
+                      name="Ventas"
+                      radius={[6, 6, 0, 0]}
+                      fill={theme === "dark" ? "#3b82f6" : "#2563eb"}
+                      isAnimationActive
+                      animationDuration={800}
+                    />
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -333,6 +382,46 @@ export default function App() {
                   : "Carga tus datos para ver insights."}
               </p>
             </div>
+
+            {/* 🧠 Gráficos generados por IA */}
+            {generated.length > 0 && (
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium text-zinc-800 dark:text-zinc-200">
+                    🧠 Gráficos generados por IA
+                  </div>
+                  <button
+                    onClick={() => setGenerated([])}
+                    className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                    title="Limpiar"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {generated.map((spec) => (
+                    <div
+                      key={spec.id}
+                      className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3"
+                    >
+                      <div className="text-sm font-medium mb-2">{spec.title}</div>
+                      <DynamicChart
+                        spec={spec}
+                        ventas={ventas}
+                        serieBar={serieBar}
+                        mesActivo={mesActivo}
+                      />
+                      {spec.notes && (
+                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                          {spec.notes}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </main>
       </div>
