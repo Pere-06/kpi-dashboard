@@ -3,43 +3,42 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "engines": { "node": ">=18" },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@clerk/clerk-react": "5.43.1",
-    "@clerk/clerk-sdk-node": "5.1.6",
-    "framer-motion": "12.23.12",
-    "papaparse": "5.5.3",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "recharts": "3.1.2"
+    "@clerk/clerk-react": "^5.43.1",
+    "@clerk/clerk-sdk-node": "^5.1.6",
+    "framer-motion": "^12.23.12",
+    "papaparse": "^5.5.3",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "recharts": "^3.1.2",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@eslint/js": "9.33.0",
-    "@types/node": "20.14.11",
-    "@types/react": "18.3.3",
-    "@types/react-dom": "18.3.0",
-    "@types/recharts": "1.8.29",
-    "@vitejs/plugin-react": "4.3.1",
-    "autoprefixer": "10.4.21",
-    "eslint": "9.33.0",
-    "eslint-plugin-react-hooks": "5.1.0",
-    "eslint-plugin-react-refresh": "0.4.11",
-    "globals": "15.9.0",
-    "postcss": "8.4.38",
-    "source-map-js": "1.2.1",
-    "tailwindcss": "3.4.14",
-    "typescript": "5.5.4",
-    "vite": "5.3.4"
+    "@eslint/js": "^9.33.0",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.7",
+    "@types/recharts": "^1.8.29",
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.33.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.3.0",
+    "postcss": "^8.5.6",
+    "source-map-js": "^1.2.1",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2"
   },
-  "overrides": {
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+  "engines": {
+    "node": ">=18"
   }
 }
