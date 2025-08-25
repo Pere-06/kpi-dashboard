@@ -2,12 +2,19 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useSheetData } from "./hooks/useSheetData";
 import {
   ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
 } from "recharts";
 import KpiCard from "./components/KpiCard";
 import ChartCard from "./components/ChartCard";
 import ChannelPie from "./components/ChannelPie";
 import { useDarkMode } from "./hooks/useDarkMode";
+import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 
 /* =========================
    Tipos mínimos locales
@@ -22,9 +29,7 @@ type VentasRow = {
   mes?: string | null;
 };
 
-type ClientesRow = {
-  fecha?: Date | null;
-};
+type ClientesRow = { fecha?: Date | null };
 
 type SerieBarPoint = {
   mes: string;
@@ -77,20 +82,14 @@ export default function App() {
   }, [chat]);
 
   // Datos reales desde /api/data
-  const {
-    ventas,
-    clientes,
-    serieBar,
-    kpis,
-    loading,
-    err,
-  } = useSheetData() as UseSheetDataReturn;
+  const { ventas, clientes, serieBar, kpis, loading, err } =
+    (useSheetData() as UseSheetDataReturn) || {};
 
   // Meses disponibles (YYYY-MM) con fallback a serieBar.mes
   const mesesDisponibles = useMemo<string[]>(() => {
     const set = new Set<string>();
-    ventas.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
-    clientes.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
+    ventas?.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
+    clientes?.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
     if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
       serieBar.forEach((p) => {
         if (p.mes) set.add(p.mes);
@@ -113,7 +112,7 @@ export default function App() {
 
   // Distribución por canal del mes activo (suma de VENTAS por canal)
   const pieData = useMemo<{ name: string; value: number }[]>(() => {
-    if (!mesActivo || !ventas.length) return [];
+    if (!mesActivo || !ventas?.length) return [];
     const map: Record<string, number> = {};
     ventas.forEach((r) => {
       if (r.fecha && ymKey(r.fecha) === mesActivo) {
@@ -151,7 +150,21 @@ export default function App() {
             >
               {theme === "dark" ? "☀️ Claro" : "🌙 Oscuro"}
             </button>
-            <span>Pere · Cerrar sesión</span>
+
+            {/* Auth (Clerk) */}
+            <SignedIn>
+              <UserButton afterSignOutUrl="/" />
+            </SignedIn>
+            <SignedOut>
+              <SignInButton mode="modal">
+                <button
+                  className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  title="Iniciar sesión"
+                >
+                  Iniciar sesión
+                </button>
+              </SignInButton>
+            </SignedOut>
           </div>
         </div>
       </header>
@@ -165,22 +178,21 @@ export default function App() {
             {/* Input + botón */}
             <div className="mt-3 flex gap-2">
               <textarea
-                  className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900
-                 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500
-                 outline-none resize-y"
+                className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900
+                           px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500
+                           outline-none resize-y"
                 placeholder="Pide un gráfico o un insight… (Enter envía, Shift+Enter = salto)"
-  value={input}
-  onChange={(e) => setInput(e.target.value)}
-  onKeyDown={(e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      enviar();
-    }
-    // Shift+Enter ahora sí genera salto
-  }}
-  aria-label="Mensaje para el chat de análisis"
-/>
-
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    enviar();
+                  }
+                  // Shift+Enter deja pasar salto de línea
+                }}
+                aria-label="Mensaje para el chat de análisis"
+              />
               <button
                 onClick={enviar}
                 disabled={!input.trim()}
@@ -206,7 +218,9 @@ export default function App() {
                   <option value="">Cargando meses…</option>
                 ) : (
                   mesesDisponibles.map((m) => (
-                    <option key={m} value={m}>{m}</option>
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
                   ))
                 )}
               </select>
@@ -217,12 +231,11 @@ export default function App() {
               {chat.map((c, i) => (
                 <div
                   key={i}
-                  className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm
-                             ${
-                               c.who === "user"
-                                 ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                                 : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
-                             }`}
+                  className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
+                    c.who === "user"
+                      ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                      : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
+                  }`}
                 >
                   {c.msg}
                 </div>
@@ -267,7 +280,7 @@ export default function App() {
                 <div className="h-full grid place-items-center text-sm text-rose-600">
                   Error: {typeof err === "string" ? err : String(err?.message ?? err)}
                 </div>
-              ) : !serieBar.length ? (
+              ) : !serieBar?.length ? (
                 <div className="h-full grid place-items-center text-sm text-zinc-500">Sin datos.</div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
