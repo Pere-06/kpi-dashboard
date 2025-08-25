@@ -165,20 +165,22 @@ export default function App() {
             {/* Input + botón */}
             <div className="mt-3 flex gap-2">
               <textarea
-                className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900
-                           px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500
-                           outline-none resize-y"
+                  className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900
+                 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500
+                 outline-none resize-y"
                 placeholder="Pide un gráfico o un insight… (Enter envía, Shift+Enter = salto)"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    enviar();
-                  }
-                }}
-                aria-label="Mensaje para el chat de análisis"
-              />
+  value={input}
+  onChange={(e) => setInput(e.target.value)}
+  onKeyDown={(e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      enviar();
+    }
+    // Shift+Enter ahora sí genera salto
+  }}
+  aria-label="Mensaje para el chat de análisis"
+/>
+
               <button
                 onClick={enviar}
                 disabled={!input.trim()}
