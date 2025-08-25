@@ -137,37 +137,40 @@ export default function App() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       {/* Topbar */}
-      <header className="sticky top-0 z-40 backdrop-blur bg-white/70 dark:bg-zinc-950/70 border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto max-w-7xl h-14 px-4 flex items-center justify-between">
-          <h1 className="text-sm tracking-tight text-zinc-600 dark:text-zinc-400">MiKPI</h1>
-          <div className="flex items-center gap-3 text-sm text-zinc-500 dark:text-zinc-400">
-            <button
-              onClick={toggle}
-              className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-              title="Cambiar tema"
-              aria-pressed={theme === "dark"}
-              aria-label="Cambiar tema claro/oscuro"
-            >
-              {theme === "dark" ? "☀️ Claro" : "🌙 Oscuro"}
-            </button>
+      <header className="sticky top-0 z-40 backdrop-blur bg-white/60 dark:bg-zinc-950/60 border-b border-zinc-200 dark:border-zinc-800 shadow-sm">
+  <div className="mx-auto max-w-7xl h-14 px-4 flex items-center justify-between">
+    {/* Branding */}
+    <div className="flex items-center gap-2">
+      <img src="/vite.svg" alt="Logo" className="h-6 w-6" />
+      <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">MiKPI Dashboard</span>
+    </div>
 
-            {/* Auth (Clerk) */}
-            <SignedIn>
-              <UserButton afterSignOutUrl="/" />
-            </SignedIn>
-            <SignedOut>
-              <SignInButton mode="modal">
-                <button
-                  className="rounded-lg border border-zinc-200 dark:border-zinc-800 px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                  title="Iniciar sesión"
-                >
-                  Iniciar sesión
-                </button>
-              </SignInButton>
-            </SignedOut>
-          </div>
-        </div>
-      </header>
+    {/* Actions: theme + auth */}
+    <div className="flex items-center gap-3">
+      {/* Botón tema */}
+      <button
+        onClick={toggle}
+        className="rounded-full p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        title="Cambiar tema"
+      >
+        {theme === "dark" ? "🌞" : "🌙"}
+      </button>
+
+      {/* Clerk Auth */}
+      <SignedIn>
+        <UserButton afterSignOutUrl="/" />
+      </SignedIn>
+      <SignedOut>
+        <SignInButton mode="modal">
+          <button className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
+            Iniciar sesión
+          </button>
+        </SignInButton>
+      </SignedOut>
+    </div>
+  </div>
+</header>
+
 
       <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
         {/* Sidebar/chat */}

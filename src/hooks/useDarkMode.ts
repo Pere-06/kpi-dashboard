@@ -1,66 +1,52 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-export type ThemeMode = "dark" | "light";
+type Theme = "light" | "dark";
 
-function safeGetLocalStorage(key: string): string | null {
+function readInitialTheme(): Theme {
   try {
-    return window?.localStorage?.getItem(key) ?? null;
+    const saved = localStorage.getItem("theme");
+    if (saved === "dark" || saved === "light") return saved as Theme;
+    // si no hay guardado, usa el sistema
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   } catch {
-    return null;
+    return "light";
   }
 }
-function safeSetLocalStorage(key: string, value: string) {
-  try {
-    window?.localStorage?.setItem(key, value);
-  } catch {}
-}
 
-export function useDarkMode(): { theme: ThemeMode; toggle: (next?: ThemeMode) => void } {
-  const getPref = useMemo<() => ThemeMode>(() => {
-    return () => {
-      // 1) preferencia guardada
-      const saved = safeGetLocalStorage("theme");
-      if (saved === "dark" || saved === "light") return saved as ThemeMode;
-      // 2) preferencia del sistema
-      const prefersDark =
-        typeof window !== "undefined" &&
-        window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-      return prefersDark ? "dark" : "light";
-    };
-  }, []);
+export function useDarkMode() {
+  const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
 
-  const [theme, setTheme] = useState<ThemeMode>(getPref);
-
-  // aplicar clase y persistir
+  // Aplica clase 'dark' + guarda en localStorage
   useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
-    safeSetLocalStorage("theme", theme);
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {}
   }, [theme]);
 
-  // escuchar cambios del SO SOLO si no hay preferencia guardada
+  // Reacciona a cambios del SO SOLO si no hay preferencia guardada
   useEffect(() => {
-    const saved = safeGetLocalStorage("theme");
-    if (saved === "dark" || saved === "light") return;
-
-    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e: MediaQueryListEvent) => {
-      setTheme(e.matches ? "dark" : "light");
+      const saved = localStorage.getItem("theme");
+      if (!saved) setTheme(e.matches ? "dark" : "light");
     };
-
-    // addEventListener moderno con fallback a addListener
-    if (mq?.addEventListener) mq.addEventListener("change", handler);
-    else mq?.addListener?.(handler);
-
-    return () => {
-      if (mq?.removeEventListener) mq.removeEventListener("change", handler);
-      else mq?.removeListener?.(handler);
-    };
+    mq.addEventListener?.("change", handler);
+    return () => mq.removeEventListener?.("change", handler);
   }, []);
 
-  const toggle = (next?: ThemeMode) => {
-    setTheme((prev) => (next ? next : prev === "dark" ? "light" : "dark"));
-  };
+  // Sincroniza entre pestañas (si cambias el tema en otra pestaña)
+  useEffect(() => {
+    const handler = (ev: StorageEvent) => {
+      if (ev.key === "theme" && (ev.newValue === "dark" || ev.newValue === "light")) {
+        setTheme(ev.newValue as Theme);
+      }
+    };
+    window.addEventListener("storage", handler);
+    return () => window.removeEventListener("storage", handler);
+  }, []);
 
+  const toggle = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   return { theme, toggle };
 }
