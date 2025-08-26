@@ -1,30 +1,19 @@
-// src/types/chart.ts
+export type ChartType = "line" | "bar" | "area" | "pie";
 
-export type ChartType = "line" | "bar" | "area" | "pie" | "scatter";
-
-export type FilterOp =
-  | { op: "eq"; field: string; value: string | number | boolean }
-  | { op: "gte" | "lte" | "gt" | "lt"; field: string; value: number | string }
-  | { op: "in"; field: string; value: Array<string | number> };
-
-export interface DataQuery {
-  source: "mock" | "crm" | "airtable" | "postgres";
-  dataset: string;
-  fields: string[];
-  filters?: FilterOp[];
-  groupBy?: string[];
-  dateRange?: { start?: string; end?: string };
-  agg?: { op: "sum" | "avg" | "count" | "min" | "max"; field: string; as: string };
-  sort?: { by: string; dir: "asc" | "desc" };
-  limit?: number;
-}
-
-export interface ChartSpec {
+export type ChartSpec = {
+  id: string;                 // uid para render y key
   type: ChartType;
-  title?: string;
-  x: { field: string; label?: string };
-  y: { field: string; label?: string };
-  series?: { field: string }[];
-  query: DataQuery;
+  title: string;
+  x?: { field: string; label?: string };
+  y?: { field: string; label?: string };
+  series?: { field: string; label?: string }[]; // para comparativas
   notes?: string;
-}
+  // parámetros de agregación a aplicar en cliente (con tus datos locales)
+  // soportamos algunos casos comunes
+  intent:
+    | "ventas_por_canal_mes"
+    | "ventas_vs_gastos_mes"
+    | "evolucion_ventas_n_meses"
+    | "top_canales";
+  params?: Record<string, any>;
+};

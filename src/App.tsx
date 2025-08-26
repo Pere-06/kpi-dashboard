@@ -21,10 +21,8 @@ import { describeSpec } from "./ai/promptHelper";
 import type { ChartSpec } from "./types/chart";
 
 /* =========================
-   Tipos mínimos locales
+   Tipos locales
    ========================= */
-type ChatMsg = { who: "bot" | "user"; msg: string };
-
 type VentasRow = {
   fecha?: Date | null;
   canal?: string | null;
@@ -32,11 +30,8 @@ type VentasRow = {
   gastos?: number | null;
   mes?: string | null;
 };
-
 type ClientesRow = { fecha?: Date | null };
-
 type SerieBarPoint = { mes: string; ventas: number; gastos: number };
-
 type Kpis = {
   ventasMes: number;
   deltaVentas: number;
@@ -45,7 +40,6 @@ type Kpis = {
   ticketMedio: number;
   deltaTicket: number;
 };
-
 type UseSheetDataReturn = {
   ventas: VentasRow[];
   clientes: ClientesRow[];
@@ -55,38 +49,21 @@ type UseSheetDataReturn = {
   err: Error | string | null;
 };
 
+// Conversación estilo ChatGPT (para /api/chat)
+type ChatMessage = { role: "user" | "assistant"; content: string };
+
 /* =========================
-   Utils con tipos
+   Utils
    ========================= */
 const euro = (n: number = 0) =>
   n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
-/* ========= IA: cliente para /api/ai-intent ========= */
-async function askAIForSpecs(
-  prompt: string,
-  mesActivo: string | null,
-  mesesDisponibles: string[]
-): Promise<ChartSpec[] | null> {
-  try {
-    const r = await fetch("/api/ai-intent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, mesActivo, mesesDisponibles }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const { specs } = await r.json();
-    return Array.isArray(specs) ? (specs as ChartSpec[]) : [];
-  } catch {
-    return null; // señal de fallo para activar fallback local
-  }
-}
+// Heurística simple de saludo para respuestas amables
+const isGreeting = (s: string) => /^(hola|buenas|hey|holi|que tal|qué tal)\b/i.test(s.trim());
 
-/* ========= Heurística para detectar saludos ========= */
-const isGreeting = (s: string) =>
-  /^(hola|buenas|hey|holi|que tal|qué tal)\b/i.test(s.trim());
-
+// Sugerencias rápidas
 const SUGGESTIONS = [
   "ventas por canal",
   "ventas vs gastos últimos 8 meses",
@@ -94,14 +71,40 @@ const SUGGESTIONS = [
   "top 3 canales",
 ];
 
+/* ========= Cliente a /api/chat (conversacional + specs) ========= */
+async function chatWithAI(
+  messages: ChatMessage[],
+  mesActivo: string | null,
+  mesesDisponibles: string[]
+): Promise<{ reply: string; specs: ChartSpec[] } | null> {
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, mesActivo, mesesDisponibles }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    return {
+      reply: typeof data.reply === "string" ? data.reply : "",
+      specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   // Dark mode
   const { theme, toggle } = useDarkMode() as { theme: "dark" | "light"; toggle: () => void };
 
-  const [input, setInput] = useState<string>("");
-  const [chat, setChat] = useState<ChatMsg[]>([
-    { who: "bot", msg: "Hola 👋 ¿qué quieres analizar hoy?" },
+  // Conversación (inicia con saludo)
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { role: "assistant", content: "Hola 👋 ¿qué quieres analizar hoy?" },
   ]);
+
+  // Entrada de usuario
+  const [input, setInput] = useState<string>("");
 
   // Gráficos generados por IA (máx. 6)
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
@@ -111,7 +114,7 @@ export default function App() {
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [chat]);
+  }, [messages]);
 
   // Datos reales desde /api/data
   const { ventas, clientes, serieBar, kpis, loading, err } =
@@ -136,7 +139,8 @@ export default function App() {
     if (!mesSel && mesesDisponibles.length) setMesSel(mesesDisponibles.at(-1) ?? null);
   }, [mesesDisponibles, mesSel]);
 
-  const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
+  const mesActivo =
+    mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
   // Distribución por canal del mes activo (suma de VENTAS por canal)
   const pieData = useMemo<{ name: string; value: number }[]>(() => {
@@ -152,19 +156,23 @@ export default function App() {
     return Object.entries(map).map(([name, value]) => ({ name, value }));
   }, [ventas, mesActivo]);
 
-  /* ========= ENVÍO DE MENSAJE (saludo → ayuda | IA → fallback) ========= */
+  /* ========= Enviar mensaje: conversación + generación de gráficos ========= */
   const enviar = async () => {
     const text = input.trim();
     if (!text) return;
 
-    // Si es saludo o muy corto → no intentamos graficar
-    if (isGreeting(text) || text.length < 3) {
-      setChat((p) => [
+    // Añade el mensaje del usuario
+    const next = [...messages, { role: "user" as const, content: text }];
+    setMessages(next);
+    setInput("");
+
+    // Si es un saludo, responde amable y sugiere ejemplos (sin llamar a la IA)
+    if (isGreeting(text) || text.length < 2) {
+      setMessages((p) => [
         ...p,
-        { who: "user", msg: text },
         {
-          who: "bot",
-          msg:
+          role: "assistant",
+          content:
             "¡Hola! 👋 Puedo crear gráficos si me pides algo como:\n" +
             "• «ventas por canal»\n" +
             "• «ventas vs gastos últimos 8 meses»\n" +
@@ -172,39 +180,52 @@ export default function App() {
             "• «top 3 canales»",
         },
       ]);
-      setInput("");
       return;
     }
 
-    // pinta el mensaje y un estado de “pensando…”
-    setChat((p) => [
+    // Pinta “pensando…”
+    setMessages((p) => [
       ...p,
-      { who: "user", msg: text },
-      { who: "bot", msg: "Entendido ✅ generando visualizaciones…" },
+      { role: "assistant", content: "Entendido ✅ generando ideas de visualización…" },
     ]);
-    setInput("");
 
-    // 1) Preguntar a la IA del servidor
-    const specsFromAI = await askAIForSpecs(text, mesActivo, mesesDisponibles);
-    if (specsFromAI && specsFromAI.length) {
-      setGenerated((prev) => [...specsFromAI, ...prev].slice(0, 6));
-      const explain = specsFromAI.map((s) => `• ${s.title}`).join("\n");
-      setChat((p) => [...p, { who: "bot", msg: `He generado ${specsFromAI.length} gráfico(s):\n${explain}` }]);
+    // Llama a la IA conversacional
+    const ai = await chatWithAI(next, mesActivo, mesesDisponibles);
+
+    if (ai) {
+      // Reemplaza el “pensando…” con la respuesta real
+      setMessages((p) => {
+        const trimmed = p.filter(
+          (m) => m.content !== "Entendido ✅ generando ideas de visualización…"
+        );
+        return [...trimmed, { role: "assistant" as const, content: ai.reply || "Listo ✅" }];
+      });
+
+      if (ai.specs?.length) {
+        setGenerated((prev) => [...ai.specs, ...prev].slice(0, 6));
+      }
       return;
     }
 
-    // 2) Fallback local por si la IA falla o no hay clave
+    // Fallback local por si /api/chat falla
     const localSpec = parsePromptToSpec(text);
     if (localSpec) {
       setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
-      setChat((p) => [...p, { who: "bot", msg: describeSpec(localSpec) }]);
+      setMessages((p) => [
+        ...p.filter(
+          (m) => m.content !== "Entendido ✅ generando ideas de visualización…"
+        ),
+        { role: "assistant", content: describeSpec(localSpec) },
+      ]);
     } else {
-      setChat((p) => [
-        ...p,
+      setMessages((p) => [
+        ...p.filter(
+          (m) => m.content !== "Entendido ✅ generando ideas de visualización…"
+        ),
         {
-          who: "bot",
-          msg:
-            "No detecté una petición de gráfico. Prueba con:\n" +
+          role: "assistant",
+          content:
+            "No he podido conectar con la IA ahora mismo. Prueba con:\n" +
             "• «ventas por canal»\n" +
             "• «ventas vs gastos últimos 8 meses»\n" +
             "• «evolución de ventas últimos 6 meses»\n" +
@@ -231,7 +252,9 @@ export default function App() {
           {/* Branding */}
           <div className="flex items-center gap-2">
             <img src="/vite.svg" alt="Logo" className="h-6 w-6" />
-            <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">MiKPI Dashboard</span>
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">
+              MiKPI Dashboard
+            </span>
           </div>
 
           {/* Actions: theme + auth */}
@@ -250,7 +273,8 @@ export default function App() {
                 afterSignOutUrl="/"
                 appearance={{
                   elements: {
-                    userButtonPopoverCard: "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
+                    userButtonPopoverCard:
+                      "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
                     userPreview: "text-zinc-100",
                     userButtonPopoverActionButton: "hover:bg-zinc-800 text-zinc-100",
                     userButtonPopoverFooter: "border-t border-zinc-800",
@@ -341,16 +365,16 @@ export default function App() {
 
             {/* Mensajes del chat */}
             <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
-              {chat.map((c, i) => (
+              {messages.map((m, i) => (
                 <div
                   key={i}
                   className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
-                    c.who === "user"
+                    m.role === "user"
                       ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
                       : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
                   }`}
                 >
-                  {c.msg}
+                  {m.content}
                 </div>
               ))}
             </div>
@@ -437,7 +461,9 @@ export default function App() {
               <div className="font-medium text-zinc-800 dark:text-zinc-200">📌 Interpretación</div>
               <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                 {kpis
-                  ? `Las ventas del mes son ${euro(kpis.ventasMes)} (${pct(kpis.deltaVentas)} vs mes anterior). El ticket medio es ${euro(kpis.ticketMedio)}.`
+                  ? `Las ventas del mes son ${euro(kpis.ventasMes)} (${pct(
+                      kpis.deltaVentas
+                    )} vs mes anterior). El ticket medio es ${euro(kpis.ticketMedio)}.`
                   : "Carga tus datos para ver insights."}
               </p>
             </div>
@@ -446,7 +472,9 @@ export default function App() {
             {generated.length > 0 && (
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="flex items-center justify-between">
-                  <div className="font-medium text-zinc-800 dark:text-zinc-200">🧠 Gráficos generados por IA</div>
+                  <div className="font-medium text-zinc-800 dark:text-zinc-200">
+                    🧠 Gráficos generados por IA
+                  </div>
                   <button
                     onClick={() => setGenerated([])}
                     className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -458,11 +486,21 @@ export default function App() {
 
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
                   {generated.map((spec) => (
-                    <div key={spec.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                    <div
+                      key={spec.id}
+                      className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3"
+                    >
                       <div className="text-sm font-medium mb-2">{spec.title}</div>
-                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
+                      <DynamicChart
+                        spec={spec}
+                        ventas={ventas}
+                        serieBar={serieBar}
+                        mesActivo={mesActivo}
+                      />
                       {spec.notes && (
-                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>
+                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                          {spec.notes}
+                        </div>
                       )}
                     </div>
                   ))}
