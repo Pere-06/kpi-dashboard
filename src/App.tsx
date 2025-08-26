@@ -17,9 +17,8 @@ import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
 import { parsePromptToSpec } from "./ai/parsePrompt";
-import type { ChartSpec } from "./types/chart";
 import { describeSpec } from "./ai/promptHelper";
-
+import type { ChartSpec } from "./types/chart";
 
 /* =========================
    Tipos mínimos locales
@@ -36,11 +35,7 @@ type VentasRow = {
 
 type ClientesRow = { fecha?: Date | null };
 
-type SerieBarPoint = {
-  mes: string;
-  ventas: number;
-  gastos: number;
-};
+type SerieBarPoint = { mes: string; ventas: number; gastos: number };
 
 type Kpis = {
   ventasMes: number;
@@ -65,10 +60,39 @@ type UseSheetDataReturn = {
    ========================= */
 const euro = (n: number = 0) =>
   n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
-
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
-
 const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+/* ========= IA: cliente para /api/ai-intent ========= */
+async function askAIForSpecs(
+  prompt: string,
+  mesActivo: string | null,
+  mesesDisponibles: string[]
+): Promise<ChartSpec[] | null> {
+  try {
+    const r = await fetch("/api/ai-intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, mesActivo, mesesDisponibles }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { specs } = await r.json();
+    return Array.isArray(specs) ? (specs as ChartSpec[]) : [];
+  } catch {
+    return null; // señal de fallo para activar fallback local
+  }
+}
+
+/* ========= Heurística para detectar saludos ========= */
+const isGreeting = (s: string) =>
+  /^(hola|buenas|hey|holi|que tal|qué tal)\b/i.test(s.trim());
+
+const SUGGESTIONS = [
+  "ventas por canal",
+  "ventas vs gastos últimos 8 meses",
+  "evolución de ventas últimos 6 meses",
+  "top 3 canales",
+];
 
 export default function App() {
   // Dark mode
@@ -82,7 +106,7 @@ export default function App() {
   // Gráficos generados por IA (máx. 6)
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
 
-  // Auto‑scroll del chat
+  // Auto-scroll del chat
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatRef.current;
@@ -99,9 +123,7 @@ export default function App() {
     ventas?.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
     clientes?.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
     if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
-      serieBar.forEach((p) => {
-        if (p.mes) set.add(p.mes);
-      });
+      serieBar.forEach((p) => p.mes && set.add(p.mes));
     }
     return Array.from(set).sort();
   }, [ventas, clientes, serieBar]);
@@ -111,9 +133,7 @@ export default function App() {
 
   // Inicializa al último mes disponible cuando llegan datos
   useEffect(() => {
-    if (!mesSel && mesesDisponibles.length) {
-      setMesSel(mesesDisponibles.at(-1) ?? null); // último (más reciente)
-    }
+    if (!mesSel && mesesDisponibles.length) setMesSel(mesesDisponibles.at(-1) ?? null);
   }, [mesesDisponibles, mesSel]);
 
   const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
@@ -132,29 +152,63 @@ export default function App() {
     return Object.entries(map).map(([name, value]) => ({ name, value }));
   }, [ventas, mesActivo]);
 
-  const enviar = () => {
+  /* ========= ENVÍO DE MENSAJE (saludo → ayuda | IA → fallback) ========= */
+  const enviar = async () => {
     const text = input.trim();
     if (!text) return;
 
-    // Chat
+    // Si es saludo o muy corto → no intentamos graficar
+    if (isGreeting(text) || text.length < 3) {
+      setChat((p) => [
+        ...p,
+        { who: "user", msg: text },
+        {
+          who: "bot",
+          msg:
+            "¡Hola! 👋 Puedo crear gráficos si me pides algo como:\n" +
+            "• «ventas por canal»\n" +
+            "• «ventas vs gastos últimos 8 meses»\n" +
+            "• «evolución de ventas últimos 6 meses»\n" +
+            "• «top 3 canales»",
+        },
+      ]);
+      setInput("");
+      return;
+    }
+
+    // pinta el mensaje y un estado de “pensando…”
     setChat((p) => [
       ...p,
       { who: "user", msg: text },
-      { who: "bot", msg: "Entendido ✅ Generando visualizaciones…" },
+      { who: "bot", msg: "Entendido ✅ generando visualizaciones…" },
     ]);
     setInput("");
 
-    // Intento de gráfico generado por IA (parser simple)
-    const spec = parsePromptToSpec(text);
-    if (spec) {
-      setGenerated((prev) => [spec, ...prev].slice(0, 6)); // hasta 6 gráficos
+    // 1) Preguntar a la IA del servidor
+    const specsFromAI = await askAIForSpecs(text, mesActivo, mesesDisponibles);
+    if (specsFromAI && specsFromAI.length) {
+      setGenerated((prev) => [...specsFromAI, ...prev].slice(0, 6));
+      const explain = specsFromAI.map((s) => `• ${s.title}`).join("\n");
+      setChat((p) => [...p, { who: "bot", msg: `He generado ${specsFromAI.length} gráfico(s):\n${explain}` }]);
+      return;
+    }
+
+    // 2) Fallback local por si la IA falla o no hay clave
+    const localSpec = parsePromptToSpec(text);
+    if (localSpec) {
+      setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
+      setChat((p) => [...p, { who: "bot", msg: describeSpec(localSpec) }]);
     } else {
       setChat((p) => [
         ...p,
         {
           who: "bot",
           msg:
-            "No he entendido la petición para un gráfico. Prueba con: “ventas por canal”, “ventas vs gastos últimos 8 meses”, “evolución de ventas últimos 6 meses”, “top 3 canales”.",
+            "No detecté una petición de gráfico. Prueba con:\n" +
+            "• «ventas por canal»\n" +
+            "• «ventas vs gastos últimos 8 meses»\n" +
+            "• «evolución de ventas últimos 6 meses»\n" +
+            "• «top 3 canales»",
         },
       ]);
     }
@@ -177,14 +231,11 @@ export default function App() {
           {/* Branding */}
           <div className="flex items-center gap-2">
             <img src="/vite.svg" alt="Logo" className="h-6 w-6" />
-            <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">
-              MiKPI Dashboard
-            </span>
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">MiKPI Dashboard</span>
           </div>
 
           {/* Actions: theme + auth */}
           <div className="flex items-center gap-3">
-            {/* Botón tema */}
             <button
               onClick={toggle}
               className="rounded-full p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
@@ -194,17 +245,14 @@ export default function App() {
               {theme === "dark" ? "🌞" : "🌙"}
             </button>
 
-            {/* Clerk Auth */}
             <SignedIn>
               <UserButton
                 afterSignOutUrl="/"
                 appearance={{
                   elements: {
-                    userButtonPopoverCard:
-                      "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
+                    userButtonPopoverCard: "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
                     userPreview: "text-zinc-100",
-                    userButtonPopoverActionButton:
-                      "hover:bg-zinc-800 text-zinc-100",
+                    userButtonPopoverActionButton: "hover:bg-zinc-800 text-zinc-100",
                     userButtonPopoverFooter: "border-t border-zinc-800",
                   },
                 }}
@@ -254,6 +302,19 @@ export default function App() {
               >
                 Enviar
               </button>
+            </div>
+
+            {/* Chips de ejemplos */}
+            <div className="mt-2 flex flex-wrap gap-2">
+              {SUGGESTIONS.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => setInput(q)}
+                  className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                  {q}
+                </button>
+              ))}
             </div>
 
             {/* Filtro de mes */}
@@ -376,9 +437,7 @@ export default function App() {
               <div className="font-medium text-zinc-800 dark:text-zinc-200">📌 Interpretación</div>
               <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                 {kpis
-                  ? `Las ventas del mes son ${euro(kpis.ventasMes)} (${pct(
-                      kpis.deltaVentas
-                    )} vs mes anterior). El ticket medio es ${euro(kpis.ticketMedio)}.`
+                  ? `Las ventas del mes son ${euro(kpis.ventasMes)} (${pct(kpis.deltaVentas)} vs mes anterior). El ticket medio es ${euro(kpis.ticketMedio)}.`
                   : "Carga tus datos para ver insights."}
               </p>
             </div>
@@ -387,9 +446,7 @@ export default function App() {
             {generated.length > 0 && (
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="flex items-center justify-between">
-                  <div className="font-medium text-zinc-800 dark:text-zinc-200">
-                    🧠 Gráficos generados por IA
-                  </div>
+                  <div className="font-medium text-zinc-800 dark:text-zinc-200">🧠 Gráficos generados por IA</div>
                   <button
                     onClick={() => setGenerated([])}
                     className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -401,21 +458,11 @@ export default function App() {
 
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
                   {generated.map((spec) => (
-                    <div
-                      key={spec.id}
-                      className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3"
-                    >
+                    <div key={spec.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
                       <div className="text-sm font-medium mb-2">{spec.title}</div>
-                      <DynamicChart
-                        spec={spec}
-                        ventas={ventas}
-                        serieBar={serieBar}
-                        mesActivo={mesActivo}
-                      />
+                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
                       {spec.notes && (
-                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                          {spec.notes}
-                        </div>
+                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>
                       )}
                     </div>
                   ))}
