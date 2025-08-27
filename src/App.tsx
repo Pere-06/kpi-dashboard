@@ -324,19 +324,8 @@ export default function App() {
 
             {/* Auth */}
             <SignedIn>
-              <UserButton
-                afterSignOutUrl="/"
-                appearance={{
-                  elements: {
-                    userButtonPopoverCard:
-                      "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
-                    userPreview: "text-zinc-100",
-                    userButtonPopoverActionButton: "hover:bg-zinc-800 text-zinc-100",
-                    userButtonPopoverFooter: "border-t border-zinc-800",
-                  },
-                }}
-              />
-            </SignedIn>
+  <UserButton afterSignOutUrl="/" />
+</SignedIn>
             <SignedOut>
               <SignInButton mode="modal">
                 <button className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
