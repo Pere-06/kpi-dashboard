@@ -71,22 +71,29 @@ const SUGGESTIONS = [
   "top 3 canales",
 ];
 
-/* ========= Cliente a /api/chat (conversacional + specs) ========= */
+/* ========= Cliente a /api/chat (conversacional + specs) =========
+   El endpoint devuelve { assistant: string, specs: ChartSpec[] } */
 async function chatWithAI(
-  messages: ChatMessage[],
+  history: ChatMessage[],
   mesActivo: string | null,
-  mesesDisponibles: string[]
-): Promise<{ reply: string; specs: ChartSpec[] } | null> {
+  mesesDisponibles: string[],
+  maxCharts = 4
+): Promise<{ assistant: string; specs: ChartSpec[] } | null> {
   try {
     const r = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, mesActivo, mesesDisponibles }),
+      body: JSON.stringify({
+        messages: history,
+        mesActivo,
+        mesesDisponibles,
+        maxCharts,
+      }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     return {
-      reply: typeof data.reply === "string" ? data.reply : "",
+      assistant: typeof data.assistant === "string" ? data.assistant : "Listo ✅",
       specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
     };
   } catch {
@@ -162,8 +169,8 @@ export default function App() {
     if (!text) return;
 
     // Añade el mensaje del usuario
-    const next = [...messages, { role: "user" as const, content: text }];
-    setMessages(next);
+    const nextHistory = [...messages, { role: "user" as const, content: text }];
+    setMessages(nextHistory);
     setInput("");
 
     // Si es un saludo, responde amable y sugiere ejemplos (sin llamar a la IA)
@@ -186,46 +193,50 @@ export default function App() {
     // Pinta “pensando…”
     setMessages((p) => [
       ...p,
-      { role: "assistant", content: "Entendido ✅ generando ideas de visualización…" },
+      { role: "assistant", content: "Entendido ✅ generando visualizaciones…" },
     ]);
 
-    // Llama a la IA conversacional
-    const ai = await chatWithAI(next, mesActivo, mesesDisponibles);
+    // Llama a la IA conversacional con historial completo
+    const ai = await chatWithAI(nextHistory, mesActivo, mesesDisponibles, 4);
 
     if (ai) {
-      // Reemplaza el “pensando…” con la respuesta real
+      // Quita el “pensando…” y añade respuesta del asistente
       setMessages((p) => {
         const trimmed = p.filter(
-          (m) => m.content !== "Entendido ✅ generando ideas de visualización…"
+          (m) => m.content !== "Entendido ✅ generando visualizaciones…"
         );
-        return [...trimmed, { role: "assistant" as const, content: ai.reply || "Listo ✅" }];
+        return [...trimmed, { role: "assistant" as const, content: ai.assistant || "Listo ✅" }];
       });
 
+      // Agrega los gráficos propuestos (si hay)
       if (ai.specs?.length) {
         setGenerated((prev) => [...ai.specs, ...prev].slice(0, 6));
+      } else {
+        // Si el asistente no propuso gráficos, intenta heurística local
+        const localSpec = parsePromptToSpec(text);
+        if (localSpec) {
+          setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
+          setMessages((p) => [...p, { role: "assistant", content: describeSpec(localSpec) }]);
+        }
       }
       return;
     }
 
-    // Fallback local por si /api/chat falla
+    // Fallback si /api/chat falla
     const localSpec = parsePromptToSpec(text);
     if (localSpec) {
       setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
       setMessages((p) => [
-        ...p.filter(
-          (m) => m.content !== "Entendido ✅ generando ideas de visualización…"
-        ),
+        ...p.filter((m) => m.content !== "Entendido ✅ generando visualizaciones…"),
         { role: "assistant", content: describeSpec(localSpec) },
       ]);
     } else {
       setMessages((p) => [
-        ...p.filter(
-          (m) => m.content !== "Entendido ✅ generando ideas de visualización…"
-        ),
+        ...p.filter((m) => m.content !== "Entendido ✅ generando visualizaciones…"),
         {
           role: "assistant",
           content:
-            "No he podido conectar con la IA ahora mismo. Prueba con:\n" +
+            "No he podido entender la petición. Prueba con:\n" +
             "• «ventas por canal»\n" +
             "• «ventas vs gastos últimos 8 meses»\n" +
             "• «evolución de ventas últimos 6 meses»\n" +
@@ -235,7 +246,7 @@ export default function App() {
     }
   };
 
-  // Tooltip estilizado para el bar chart
+  // Tooltip estilizado para el bar chart base
   const tooltipStyle: React.CSSProperties = {
     backgroundColor: theme === "dark" ? "#18181b" : "#ffffff",
     borderRadius: 12,
