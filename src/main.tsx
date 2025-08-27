@@ -4,40 +4,38 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
-import { ClerkProvider } from "@clerk/clerk-react";
+import {
+  ClerkProvider,
+  SignedIn,
+  SignedOut,
+  SignIn,
+} from "@clerk/clerk-react";
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
-// Apariencia global de Clerk (opaca + adapta dark/light con Tailwind)
+// Apariencia Clerk: opaca + dark/light correcto
 const providerAppearance = {
   variables: {
-    colorPrimary: "#111827",              // acorde a tu UI
-    colorBackground: "transparent",       // usamos clases para el fondo real
+    colorPrimary: "#111827",
+    colorBackground: "transparent",
     borderRadius: "0.75rem",
   },
   elements: {
-    /* ======= Modal raíz ======= */
-    modalBackdrop: "bg-black/60", // overlay más oscuro
-
-    // Contenedor raíz del modal (opaco)
+    modalBackdrop: "bg-black/60",
     rootBox:
       "bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 !bg-opacity-100",
-
-    // Card interna (opaca)
     card:
       "bg-white dark:bg-zinc-900 rounded-xl shadow-lg border border-zinc-200 dark:border-zinc-800 !bg-opacity-100",
 
     headerTitle: "text-zinc-900 dark:text-zinc-100",
     headerSubtitle: "text-zinc-600 dark:text-zinc-400",
 
-    /* “Continue with Google” / divisor “or” */
     socialButtonsBlockButton:
       "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700",
     socialButtonsProviderIcon: "text-zinc-700 dark:text-zinc-300",
     dividerLine: "bg-zinc-200 dark:bg-zinc-800",
     dividerText: "text-zinc-500 dark:text-zinc-400",
 
-    /* Inputs y botones del formulario */
     formFieldLabel: "text-zinc-700 dark:text-zinc-300",
     formFieldInput:
       "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500",
@@ -45,13 +43,11 @@ const providerAppearance = {
     formButtonPrimary:
       "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200",
 
-    /* Pie del card (el bloque donde sale “Don’t have an account? …”) */
     footer:
       "bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 !bg-opacity-100",
     footerActionText: "text-zinc-600 dark:text-zinc-400",
     footerActionLink: "text-indigo-600 dark:text-indigo-400 hover:underline",
 
-    /* ======= Popover del UserButton (Manage account / Sign out) ======= */
     userButtonPopoverCard:
       "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl !bg-opacity-100 shadow-xl",
     userButtonPopoverHeader:
@@ -89,7 +85,21 @@ if (!PUBLISHABLE_KEY) {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <ClerkProvider publishableKey={PUBLISHABLE_KEY} appearance={providerAppearance}>
-        <App />
+        {/* 🔐 Bloqueo de toda la app tras login */}
+        <SignedIn>
+          <App />
+        </SignedIn>
+
+        <SignedOut>
+          {/* Contenedor neutro detrás del modal */}
+          <div className="min-h-screen grid place-items-center bg-zinc-50 dark:bg-zinc-950">
+            <SignIn
+              routing="hash"         // Vite SPA sin rutas de servidor
+              afterSignInUrl="/"      // vuelve a la home tras login
+              signUpUrl="#/sign-up"   // registro en el mismo modal
+            />
+          </div>
+        </SignedOut>
       </ClerkProvider>
     </React.StrictMode>
   );
