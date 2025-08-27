@@ -1,115 +1,183 @@
-// api/chat.ts
+// src/api/chat.ts
 export const config = { runtime: "edge" };
 
 import { z } from "zod";
 
-type Msg = { role: "user" | "assistant" | "system"; content: string };
-
-// === Esquema de ChartSpec compatible con tu DynamicChart ===
+/** === Tipos de salida esperados por el front === */
 const ChartType = z.enum(["line", "bar", "area", "pie"]);
 const Intent = z.enum([
-  "ventas_por_canal_mes",
-  "ventas_vs_gastos_mes",
-  "evolucion_ventas_n_meses",
-  "top_canales",
+  "ventas_por_canal_mes",       // pie (usa mesActivo)
+  "ventas_vs_gastos_mes",       // bar (usa params.months, default 8)
+  "evolucion_ventas_n_meses",   // line/area (usa params.months, default 6)
+  "top_canales",                 // bar (usa params.topN, default 5)
 ]);
-const ChartSpec = z.object({
-  id: z.string(),
+
+const ChartSpecSchema = z.object({
+  id: z.string().optional(), // el backend añadirá uno si falta
   type: ChartType,
   title: z.string(),
   intent: Intent,
+  params: z.record(z.any()).optional(), // {months?: number, topN?: number, ...}
   notes: z.string().optional(),
-  params: z.record(z.any()).optional(),
 });
-const SpecsPayload = z.object({ specs: z.array(ChartSpec).max(4) });
-
-// === Entrada del request ===
-const BodySchema = z.object({
+const PayloadSchema = z.object({
   messages: z.array(
-    z.object({
-      role: z.enum(["user", "assistant", "system"]),
-      content: z.string(),
-    })
+    z.object({ role: z.enum(["user", "assistant"]), content: z.string() })
   ),
-  mesActivo: z.string().nullable().optional(),
-  mesesDisponibles: z.array(z.string()).optional(),
+  mesActivo: z.string().nullable().optional(),              // "YYYY-MM" | null
+  mesesDisponibles: z.array(z.string()).optional(),         // ["2025-03", ...]
 });
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
 const OPENAI_BASE = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
+/** Util: id corto si el modelo no lo trae */
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+/** ========= PROMPT (SYSTEM) =========
+  * Reglas claras + catálogo de intents + ejemplos
+  * El modelo SIEMPRE debe responder JSON con { reply, specs }
+  */
+const SYSTEM_PROMPT = `
+Eres un asistente de analítica para un dashboard de KPIs. 
+Tu misión: 
+1) Responder de forma breve, clara y humana al usuario en español (campo "reply").
+2) Si la petición implica visualizaciones, proponer de 1 a 4 gráficos en "specs" con la estructura marcada.
+
+Catálogo de intents soportados:
+- "ventas_por_canal_mes": Gráfico por canal del mes activo (tipo sugerido: "pie").
+- "ventas_vs_gastos_mes": Comparativa ventas vs gastos últimos N meses (default N=8) (tipo sugerido: "bar").
+- "evolucion_ventas_n_meses": Evolución de ventas últimos N meses (default N=6) (tipo sugerido: "line" o "area").
+- "top_canales": Ranking de canales por ventas (default topN=5) (tipo sugerido: "bar").
+
+Reglas estrictas:
+- Si la petición no requiere gráficos (saludo, small talk, preguntas generales), devuelve "specs": [].
+- Si no hay suficientes detalles, usa los defaults (months=8 para vs, months=6 para evolución, topN=5).
+- Los títulos deben ser claros, en español y específicos.
+- No inventes dimensiones/métricas fuera del catálogo; no definas series extrañas.
+- "params" solo cuando aporte valor ({"months": 6}, {"topN": 5}…).
+- No más de 4 gráficos por respuesta. 
+- Si dudas entre varios charts, prioriza el más útil y simple.
+
+Salida SIEMPRE en JSON con:
+{
+  "reply": string,
+  "specs": ChartSpec[]
+}
+donde ChartSpec = {
+  "id"?: string,               // opcional; si falta el backend añadirá uno
+  "type": "line"|"bar"|"area"|"pie",
+  "title": string,
+  "intent": "ventas_por_canal_mes"|"ventas_vs_gastos_mes"|"evolucion_ventas_n_meses"|"top_canales",
+  "params"?: object,           // p.ej. {"months": 6} o {"topN": 5}
+  "notes"?: string
+}
+
+Contexto disponible (no lo muestres tal cual):
+- mesActivo: YYYY-MM o null.
+- mesesDisponibles: lista de meses (YYYY-MM). Si necesitas "months", no menciones explícitamente la lista; solo úsala para elegir defaults razonables.
+
+Estilo del "reply":
+- 1–3 frases máximo.
+- Tono profesional y cercano.
+- Si generas gráficos, menciona cuáles (breve).
+- Si no generas gráficos, sugiere qué pedir para poder crear alguno (1–2 ejemplos).
+`;
+
+/** ========= FEW-SHOTS (ayudan mucho) ========= */
+const FEWSHOTS = [
+  {
+    role: "user",
+    content: "hola!",
+  },
+  {
+    role: "assistant",
+    content: JSON.stringify({
+      reply:
+        "¡Hola! Puedo crear gráficos si me pides algo como: ventas por canal, evolución de ventas últimos 6 meses, o ventas vs gastos últimos 8 meses.",
+      specs: [],
+    }),
+  },
+  {
+    role: "user",
+    content: "Quiero ver ventas por canal del mes actual.",
+  },
+  {
+    role: "assistant",
+    content: JSON.stringify({
+      reply: "Perfecto. Te muestro la distribución de ventas por canal del mes activo.",
+      specs: [
+        {
+          type: "pie",
+          title: "Ventas por canal (mes activo)",
+          intent: "ventas_por_canal_mes",
+        },
+      ],
+    }),
+  },
+  {
+    role: "user",
+    content: "compárame ventas vs gastos de los últimos meses",
+  },
+  {
+    role: "assistant",
+    content: JSON.stringify({
+      reply:
+        "He añadido una comparativa de ventas vs gastos para los últimos 8 meses.",
+      specs: [
+        {
+          type: "bar",
+          title: "Ventas vs Gastos (últimos 8 meses)",
+          intent: "ventas_vs_gastos_mes",
+          params: { months: 8 },
+        },
+      ],
+    }),
+  },
+  {
+    role: "user",
+    content: "muéstrame la evolución de ventas y el top 3 canales",
+  },
+  {
+    role: "assistant",
+    content: JSON.stringify({
+      reply:
+        "Te presento la evolución de ventas de los últimos 6 meses y el top 3 de canales.",
+      specs: [
+        {
+          type: "line",
+          title: "Evolución de ventas (últimos 6 meses)",
+          intent: "evolucion_ventas_n_meses",
+          params: { months: 6 },
+        },
+        {
+          type: "bar",
+          title: "Top 3 canales por ventas",
+          intent: "top_canales",
+          params: { topN: 3 },
+        },
+      ],
+    }),
+  },
+];
 
 export default async function handler(req: Request) {
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
-  if (!OPENAI_API_KEY) {
-    return new Response("Missing OPENAI_API_KEY", { status: 500 });
-  }
-
   try {
-    const { messages, mesActivo, mesesDisponibles } = BodySchema.parse(
-      await req.json()
-    );
+    const body = await req.json();
+    const { messages, mesActivo, mesesDisponibles } = PayloadSchema.parse(body);
 
-    const system: Msg = {
-      role: "system",
-      content: `
-Eres un analista de datos para un dashboard. Hablas en español, educado y claro.
-Tu objetivo: responder al usuario y, cuando lo pida (o sea útil), proponer visualizaciones.
-Dispones de una herramienta "make_charts" para devolver hasta 4 gráficos en JSON.
-No inventes columnas que no existan: el backend sabrá resolver los intents.
-Si no procede crear gráficos, responde solo con texto.
-Contexto:
-- mesActivo: ${mesActivo ?? "null"}
-- mesesDisponibles: ${(mesesDisponibles ?? []).join(", ") || "[]"}
-`.trim(),
-    };
+    const userContext = `
+mesActivo: ${mesActivo ?? "null"}
+mesesDisponibles: ${JSON.stringify(mesesDisponibles ?? [])}
+Conversation (JSON):
+${JSON.stringify(messages.slice(-8))} 
+Devuelve SOLO un objeto JSON válido: { "reply": string, "specs": ChartSpec[] }.
+`;
 
-    const tools = [
-      {
-        type: "function" as const,
-        function: {
-          name: "make_charts",
-          description:
-            "Devuelve un conjunto de visualizaciones (0..4) coherentes con la petición.",
-          parameters: {
-            type: "object",
-            properties: {
-              specs: {
-                type: "array",
-                maxItems: 4,
-                items: {
-                  type: "object",
-                  required: ["id", "type", "title", "intent"],
-                  properties: {
-                    id: { type: "string" },
-                    type: { type: "string", enum: ["line", "bar", "area", "pie"] },
-                    title: { type: "string" },
-                    intent: {
-                      type: "string",
-                      enum: [
-                        "ventas_por_canal_mes",
-                        "ventas_vs_gastos_mes",
-                        "evolucion_ventas_n_meses",
-                        "top_canales",
-                      ],
-                    },
-                    notes: { type: "string" },
-                    params: { type: "object", additionalProperties: true },
-                  },
-                },
-              },
-            },
-            required: ["specs"],
-            additionalProperties: false,
-          },
-        },
-      },
-    ];
-
-    // Llamada a OpenAI con herramientas
     const r = await fetch(`${OPENAI_BASE}/chat/completions`, {
       method: "POST",
       headers: {
@@ -117,48 +185,57 @@ Contexto:
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: MODEL,
         temperature: 0.2,
-        messages: [system, ...messages],
-        tools,
-        tool_choice: "auto",
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          ...FEWSHOTS,
+          { role: "user", content: userContext },
+        ],
       }),
     });
 
     if (!r.ok) {
-      return new Response(`Upstream error: ${await r.text()}`, { status: 502 });
+      const txt = await r.text();
+      return new Response(`Upstream error: ${txt}`, { status: 502 });
     }
+
     const json = await r.json();
-    const choice = json.choices?.[0];
-    const msg = choice?.message;
+    const raw = json.choices?.[0]?.message?.content || "{}";
 
-    let reply = (msg?.content as string) || ""; // texto normal
-    let specs: z.infer<typeof ChartSpec>[] = [];
-
-    // ¿La IA llamó a la herramienta?
-    const toolCalls = msg?.tool_calls ?? [];
-    const call = toolCalls.find((t: any) => t?.function?.name === "make_charts");
-    if (call?.function?.arguments) {
-      try {
-        const parsed = SpecsPayload.safeParse(
-          JSON.parse(call.function.arguments)
-        );
-        if (parsed.success) {
-          specs = parsed.data.specs.map((s) => ({
-            ...s,
-            id: s.id || uid(),
-            params: s.params ?? {},
-          }));
-        }
-      } catch {
-        // si falla el parseo, devolvemos solo reply
-      }
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = { reply: "No he podido procesar la petición.", specs: [] };
     }
+
+    const reply = typeof parsed.reply === "string" ? parsed.reply : "";
+    const specsRaw = Array.isArray(parsed.specs) ? parsed.specs : [];
+
+    // Sanea y limita el output
+    const specs = specsRaw
+      .slice(0, 4)
+      .map((s: any) => {
+        const candidate = ChartSpecSchema.parse({
+          id: s.id || uid(),
+          type: s.type,
+          title: s.title,
+          intent: s.intent,
+          params: s.params ?? {},
+          notes: s.notes,
+        });
+        return candidate;
+      });
 
     return new Response(JSON.stringify({ reply, specs }), {
       headers: { "Content-Type": "application/json" },
     });
   } catch (e: any) {
-    return new Response(`Bad Request: ${e?.message ?? e}`, { status: 400 });
+    return new Response(
+      JSON.stringify({ reply: "Ha fallado la generación.", specs: [] }),
+      { headers: { "Content-Type": "application/json" }, status: 400 }
+    );
   }
 }
