@@ -13,6 +13,7 @@
   "dependencies": {
     "@clerk/clerk-react": "^5.43.1",
     "@clerk/clerk-sdk-node": "^5.1.6",
+    "@clerk/localizations": "^3.24.0",
     "framer-motion": "^12.23.12",
     "papaparse": "^5.5.3",
     "react": "^19.1.1",

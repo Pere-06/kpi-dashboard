@@ -22,7 +22,7 @@ import type { ChartSpec } from "./types/chart";
 import { t, type Lang } from "./i18n";
 import { useLang } from "./hooks/useLang";
 
-/* ===== Tipos locales (idénticos a tu versión) ===== */
+/* ===== Tipos locales ===== */
 type VentasRow = {
   fecha?: Date | null;
   canal?: string | null;
@@ -58,7 +58,7 @@ const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padSta
 const isGreeting = (s: string) =>
   /^(hola|buenas|hey|holi|que tal|qué tal|hi|hello|hey there)\b/i.test(s.trim());
 
-/* ===== Cliente a /api/chat (conversacional + specs) ===== */
+/* ===== Cliente a /api/chat ===== */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
@@ -83,6 +83,10 @@ async function chatWithAI(
   }
 }
 
+/* ===== Persistencia en localStorage ===== */
+const LS_MESSAGES = "mikpi:messages";
+const LS_CHARTS = "mikpi:generated";
+
 export default function App() {
   /* Tema y lenguaje */
   const { theme, toggle } = useDarkMode() as { theme: "dark" | "light"; toggle: () => void };
@@ -94,14 +98,45 @@ export default function App() {
   ]);
   const [input, setInput] = useState<string>("");
   const [isTyping, setIsTyping] = useState<boolean>(false);
+
+  /* Gráficos generados */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
+
+  /* Auto-scroll chat */
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, isTyping, lang]);
 
-  /* Datos */
+  /* Hidratación desde localStorage */
+  useEffect(() => {
+    try {
+      const m = localStorage.getItem(LS_MESSAGES);
+      if (m) {
+        const parsed = JSON.parse(m);
+        if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
+      }
+      const g = localStorage.getItem(LS_CHARTS);
+      if (g) {
+        const parsed = JSON.parse(g);
+        if (Array.isArray(parsed)) setGenerated(parsed);
+      }
+    } catch {}
+  }, []);
+  /* Guardado en localStorage */
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_MESSAGES, JSON.stringify(messages));
+    } catch {}
+  }, [messages]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_CHARTS, JSON.stringify(generated));
+    } catch {}
+  }, [generated]);
+
+  /* Datos del backend */
   const { ventas, clientes, serieBar, kpis, loading, err } =
     (useSheetData() as UseSheetDataReturn) || {};
 
@@ -123,7 +158,7 @@ export default function App() {
   const mesActivo =
     mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
-  /* Pie por canal del mes activo */
+  /* Pie por canal (mes activo) */
   const pieData = useMemo<{ name: string; value: number }[]>(() => {
     if (!mesActivo || !ventas?.length) return [];
     const map: Record<string, number> = {};
@@ -183,6 +218,7 @@ export default function App() {
     }
   };
 
+  /* Tooltip Recharts */
   const tooltipStyle: React.CSSProperties = {
     backgroundColor: theme === "dark" ? "#18181b" : "#ffffff",
     borderRadius: 12,
@@ -271,7 +307,7 @@ export default function App() {
               {t(lang, "chat.title")}
             </h2>
 
-            {/* Input + button */}
+            {/* Input + botón */}
             <div className="mt-3 flex gap-2">
               <textarea
                 className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none resize-y"
@@ -295,7 +331,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Examples / chips */}
+            {/* Sugerencias */}
             <div className="mt-2 flex flex-wrap gap-2">
               {SUGGESTIONS.map((q) => (
                 <button
@@ -308,9 +344,11 @@ export default function App() {
               ))}
             </div>
 
-            {/* Month filter */}
+            {/* Filtro de mes */}
             <div className="mt-4">
-              <label className="text-xs text-zinc-500 dark:text-zinc-400">{t(lang, "month.filter")}</label>
+              <label className="text-xs text-zinc-500 dark:text-zinc-400">
+                {t(lang, "month.filter")}
+              </label>
               <select
                 className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
                 value={mesActivo || ""}
@@ -329,7 +367,7 @@ export default function App() {
               </select>
             </div>
 
-            {/* Messages */}
+            {/* Mensajes */}
             <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
               {messages.map((m, i) => (
                 <div
@@ -344,7 +382,7 @@ export default function App() {
                 </div>
               ))}
 
-              {/* Typing indicator */}
+              {/* Indicador de escritura */}
               {isTyping && (
                 <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
                   <span className="animate-bounce">●</span>
@@ -356,7 +394,7 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Main panel */}
+        {/* Panel principal */}
         <main className="overflow-y-auto">
           <div className="p-4 lg:p-6 space-y-4">
             {/* KPIs */}
@@ -384,7 +422,7 @@ export default function App() {
               />
             </div>
 
-            {/* Default bar chart */}
+            {/* Gráfico de barras por defecto */}
             <ChartCard title={t(lang, "chart.bar.title")}>
               {loading ? (
                 <div className="h-full grid place-items-center text-sm text-zinc-500">
@@ -427,7 +465,7 @@ export default function App() {
               )}
             </ChartCard>
 
-            {/* Pie by channel */}
+            {/* Pie por canal */}
             <ChartCard
               title={`${t(lang, "pie.title.prefix")}${mesActivo || "—"}`}
               footer={
@@ -455,7 +493,7 @@ export default function App() {
               </p>
             </div>
 
-            {/* AI charts */}
+            {/* Gráficos de IA */}
             {generated.length > 0 && (
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="flex items-center justify-between">
