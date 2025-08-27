@@ -9,3 +9,22 @@
 .dark .cl-rootBox, .dark .cl-card {
   background-color: #0b0b0e !important; /* zinc-950-ish */
 }
+/* ----- Clerk: High-contrast patch for UserProfile ----- */
+.dark .cl-userProfile-root,
+.dark .cl-userProfile-root * {
+  color: #e5e7eb; /* zinc-200 */
+}
+.dark .cl-userProfile-root .cl-badge {
+  background-color: #27272a !important;  /* zinc-800 */
+  border-color: #3f3f46 !important;      /* zinc-700 */
+  color: #e5e7eb !important;
+}
+.dark .cl-userProfile-root .cl-navbar,
+.dark .cl-userProfile-root .cl-page,
+.dark .cl-userProfile-root .cl-card,
+.dark .cl-userProfile-root .cl-content {
+  background: #0b0f19 !important; /* tu fondo oscuro */
+}
+.dark .cl-userProfile-root .cl-formFieldLabel {
+  color: #d1d5db !important; /* zinc-300 */
+}
