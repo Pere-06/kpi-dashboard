@@ -59,11 +59,8 @@ const euro = (n: number = 0) =>
   n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-
-// Heurística simple de saludo para respuestas amables
 const isGreeting = (s: string) => /^(hola|buenas|hey|holi|que tal|qué tal)\b/i.test(s.trim());
 
-// Sugerencias rápidas
 const SUGGESTIONS = [
   "ventas por canal",
   "ventas vs gastos últimos 8 meses",
@@ -71,8 +68,7 @@ const SUGGESTIONS = [
   "top 3 canales",
 ];
 
-/* ========= Cliente a /api/chat (conversacional + specs) =========
-   El endpoint devuelve { assistant: string, specs: ChartSpec[] } */
+/* ========= Cliente a /api/chat (conversacional + specs) ========= */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
@@ -83,17 +79,12 @@ async function chatWithAI(
     const r = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: history,
-        mesActivo,
-        mesesDisponibles,
-        maxCharts,
-      }),
+      body: JSON.stringify({ messages: history, mesActivo, mesesDisponibles, maxCharts }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     return {
-      assistant: typeof data.assistant === "string" ? data.assistant : "Listo ✅",
+      assistant: typeof data.reply === "string" ? data.reply : (data.assistant || "Listo ✅"),
       specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
     };
   } catch {
@@ -109,9 +100,10 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: "Hola 👋 ¿qué quieres analizar hoy?" },
   ]);
-
-  // Entrada de usuario
   const [input, setInput] = useState<string>("");
+
+  // Typing indicator
+  const [isTyping, setIsTyping] = useState<boolean>(false);
 
   // Gráficos generados por IA (máx. 6)
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
@@ -121,7 +113,7 @@ export default function App() {
   useEffect(() => {
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, isTyping]);
 
   // Datos reales desde /api/data
   const { ventas, clientes, serieBar, kpis, loading, err } =
@@ -140,12 +132,9 @@ export default function App() {
 
   // Mes seleccionado (controlado)
   const [mesSel, setMesSel] = useState<string | null>(null);
-
-  // Inicializa al último mes disponible cuando llegan datos
   useEffect(() => {
     if (!mesSel && mesesDisponibles.length) setMesSel(mesesDisponibles.at(-1) ?? null);
   }, [mesesDisponibles, mesSel]);
-
   const mesActivo =
     mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
@@ -168,12 +157,11 @@ export default function App() {
     const text = input.trim();
     if (!text) return;
 
-    // Añade el mensaje del usuario
     const nextHistory = [...messages, { role: "user" as const, content: text }];
     setMessages(nextHistory);
     setInput("");
 
-    // Si es un saludo, responde amable y sugiere ejemplos (sin llamar a la IA)
+    // Si es un saludo, responde amable y sugiere ejemplos (sin IA remota)
     if (isGreeting(text) || text.length < 2) {
       setMessages((p) => [
         ...p,
@@ -190,58 +178,54 @@ export default function App() {
       return;
     }
 
-    // Pinta “pensando…”
-    setMessages((p) => [
-      ...p,
-      { role: "assistant", content: "Entendido ✅ generando visualizaciones…" },
-    ]);
+    // Mostrar typing
+    setIsTyping(true);
 
-    // Llama a la IA conversacional con historial completo
-    const ai = await chatWithAI(nextHistory, mesActivo, mesesDisponibles, 4);
+    try {
+      const ai = await chatWithAI(nextHistory, mesActivo, mesesDisponibles, 4);
 
-    if (ai) {
-      // Quita el “pensando…” y añade respuesta del asistente
-      setMessages((p) => {
-        const trimmed = p.filter(
-          (m) => m.content !== "Entendido ✅ generando visualizaciones…"
-        );
-        return [...trimmed, { role: "assistant" as const, content: ai.assistant || "Listo ✅" }];
-      });
+      // Oculta typing al recibir respuesta
+      setIsTyping(false);
 
-      // Agrega los gráficos propuestos (si hay)
-      if (ai.specs?.length) {
-        setGenerated((prev) => [...ai.specs, ...prev].slice(0, 6));
-      } else {
-        // Si el asistente no propuso gráficos, intenta heurística local
-        const localSpec = parsePromptToSpec(text);
-        if (localSpec) {
-          setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
-          setMessages((p) => [...p, { role: "assistant", content: describeSpec(localSpec) }]);
+      if (ai) {
+        setMessages((p) => [...p, { role: "assistant" as const, content: ai.assistant || "Listo ✅" }]);
+        if (ai.specs?.length) {
+          setGenerated((prev) => [...ai.specs, ...prev].slice(0, 6));
+        } else {
+          // Heurística local si no propuso gráficos
+          const localSpec = parsePromptToSpec(text);
+          if (localSpec) {
+            setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
+            setMessages((p) => [...p, { role: "assistant", content: describeSpec(localSpec) }]);
+          }
         }
+        return;
       }
-      return;
-    }
 
-    // Fallback si /api/chat falla
-    const localSpec = parsePromptToSpec(text);
-    if (localSpec) {
-      setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
+      // Fallback si /api/chat falla
+      const localSpec = parsePromptToSpec(text);
+      if (localSpec) {
+        setGenerated((prev) => [localSpec, ...prev].slice(0, 6));
+        setMessages((p) => [...p, { role: "assistant", content: describeSpec(localSpec) }]);
+      } else {
+        setMessages((p) => [
+          ...p,
+          {
+            role: "assistant",
+            content:
+              "No he podido entender la petición. Prueba con:\n" +
+              "• «ventas por canal»\n" +
+              "• «ventas vs gastos últimos 8 meses»\n" +
+              "• «evolución de ventas últimos 6 meses»\n" +
+              "• «top 3 canales»",
+          },
+        ]);
+      }
+    } catch {
+      setIsTyping(false);
       setMessages((p) => [
-        ...p.filter((m) => m.content !== "Entendido ✅ generando visualizaciones…"),
-        { role: "assistant", content: describeSpec(localSpec) },
-      ]);
-    } else {
-      setMessages((p) => [
-        ...p.filter((m) => m.content !== "Entendido ✅ generando visualizaciones…"),
-        {
-          role: "assistant",
-          content:
-            "No he podido entender la petición. Prueba con:\n" +
-            "• «ventas por canal»\n" +
-            "• «ventas vs gastos últimos 8 meses»\n" +
-            "• «evolución de ventas últimos 6 meses»\n" +
-            "• «top 3 canales»",
-        },
+        ...p,
+        { role: "assistant", content: "Se produjo un error al procesar la solicitud." },
       ]);
     }
   };
@@ -388,6 +372,15 @@ export default function App() {
                   {m.content}
                 </div>
               ))}
+
+              {/* Typing indicator */}
+              {isTyping && (
+                <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
+                  <span className="animate-bounce">●</span>
+                  <span className="animate-bounce [animation-delay:150ms]">●</span>
+                  <span className="animate-bounce [animation-delay:300ms]">●</span>
+                </div>
+              )}
             </div>
           </div>
         </aside>
