@@ -237,19 +237,53 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      {/* 🔧 Parche visual para Clerk (modal + cards) */}
+      {/* ======== CLERK HARDENING (fondo opaco/contraste) ======== */}
       <style>{`
-        .cl-modalBackdrop { background-color: rgba(0,0,0,0.5) !important; }
-        .cl-rootBox, .cl-card {
-          background-color: #ffffff !important;
-          border-radius: 1rem !important;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.2) !important;
-          border: 1px solid rgba(63,63,70,.3) !important;
+        /* Backdrop más oscuro y con blur suave */
+        :where(.cl-modalBackdrop){background:rgba(0,0,0,.6)!important;backdrop-filter:blur(3px)!important}
+
+        /* Tarjetas del modal (SignIn/SignUp) y popover del UserButton */
+        :where(.cl-card,.cl-userButtonPopoverCard){
+          background:#0b0b0e !important;
+          border:1px solid #27272a !important;
+          box-shadow:0 10px 40px rgba(0,0,0,.55) !important;
         }
-        .dark .cl-rootBox, .dark .cl-card {
-          background-color: #0b0b0e !important; /* zinc-950 aprox */
-          border-color: rgba(39,39,42,.6) !important; /* zinc-800 aprox */
+
+        /* Tipografías principales */
+        :where(.cl-headerTitle,.cl-headerSubtitle,.cl-text,.cl-formFieldLabel,.cl-userButtonPopoverActionButton){
+          color:#e5e7eb !important;
         }
+
+        /* Inputs */
+        :where(.cl-input){
+          background:#0f0f14 !important;
+          border-color:#3f3f46 !important;
+          color:#e5e7eb !important;
+        }
+
+        /* Botones principales */
+        :where(.cl-buttonPrimary){
+          background:#111827 !important;
+          border-color:#1f2937 !important;
+          color:#f9fafb !important;
+        }
+
+        /* Botones sociales y secundarios */
+        :where(.cl-socialButtonsIconButton,.cl-button){
+          background:#0f172a !important;
+          border-color:#334155 !important;
+          color:#e5e7eb !important;
+        }
+
+        /* Divisores y links */
+        :where(.cl-dividerLine){background:#27272a !important}
+        :where(.cl-link){color:#93c5fd !important}
+
+        /* Overrides claros cuando el sitio está en modo claro */
+        :root:not(.dark) :where(.cl-card,.cl-userButtonPopoverCard){background:#ffffff !important;border:1px solid #e5e7eb !important}
+        :root:not(.dark) :where(.cl-input){background:#ffffff !important;border-color:#d4d4d8 !important;color:#111827 !important}
+        :root:not(.dark) :where(.cl-buttonPrimary){background:#111827 !important;color:#f9fafb !important}
+        :root:not(.dark) :where(.cl-text,.cl-headerTitle,.cl-headerSubtitle,.cl-formFieldLabel){color:#111827 !important}
       `}</style>
 
       {/* Topbar */}
@@ -294,19 +328,16 @@ export default function App() {
                 afterSignOutUrl="/"
                 appearance={{
                   elements: {
-                    // 👇 Fondo opaco en popover (antes tenía /95)
                     userButtonPopoverCard:
-                      "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-2xl",
-                    userPreview: "text-zinc-900 dark:text-zinc-100",
-                    userButtonPopoverActionButton:
-                      "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300",
-                    userButtonPopoverFooter: "border-t border-zinc-200 dark:border-zinc-800",
+                      "bg-zinc-900/95 border border-zinc-800 shadow-xl rounded-2xl",
+                    userPreview: "text-zinc-100",
+                    userButtonPopoverActionButton: "hover:bg-zinc-800 text-zinc-100",
+                    userButtonPopoverFooter: "border-t border-zinc-800",
                   },
                 }}
               />
             </SignedIn>
             <SignedOut>
-              {/* El modal hereda los estilos del <style> y del Provider */}
               <SignInButton mode="modal">
                 <button className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
                   {t(lang, "auth.signin")}

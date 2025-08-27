@@ -2,3 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Clerk hardening (opcional) */
+.cl-rootBox, .cl-card {
+  background-color: #ffffff !important;
+}
+.dark .cl-rootBox, .dark .cl-card {
+  background-color: #0b0b0e !important; /* zinc-950-ish */
+}
