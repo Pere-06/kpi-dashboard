@@ -21,8 +21,12 @@ import { describeSpec } from "./ai/promptHelper";
 import type { ChartSpec } from "./types/chart";
 import { t, type Lang } from "./i18n";
 import { useLang } from "./hooks/useLang";
+import { AnimatePresence, motion } from "framer-motion";
+import clsx from "clsx";
 
-/* ===== Tipos locales ===== */
+/* =========================
+   Tipos locales
+   ========================= */
 type VentasRow = {
   fecha?: Date | null;
   canal?: string | null;
@@ -50,7 +54,9 @@ type UseSheetDataReturn = {
 };
 type ChatMessage = { role: "user" | "assistant"; content: string };
 
-/* ===== Utils ===== */
+/* =========================
+   Utils
+   ========================= */
 const euro = (n: number = 0) =>
   n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
@@ -58,7 +64,9 @@ const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padSta
 const isGreeting = (s: string) =>
   /^(hola|buenas|hey|holi|que tal|qué tal|hi|hello|hey there)\b/i.test(s.trim());
 
-/* ===== Cliente a /api/chat ===== */
+/* =========================
+   Cliente a /api/chat
+   ========================= */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
@@ -75,7 +83,7 @@ async function chatWithAI(
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     return {
-      assistant: typeof data.reply === "string" ? data.reply : (data.assistant || "Ok"),
+      assistant: typeof data.reply === "string" ? data.reply : data.assistant || "Ok",
       specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
     };
   } catch {
@@ -83,33 +91,111 @@ async function chatWithAI(
   }
 }
 
-/* ===== Persistencia en localStorage ===== */
+/* =========================
+   Persistencia
+   ========================= */
 const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
 
+/* =========================
+   Componentes UI del chat
+   ========================= */
+function Avatar({ role }: { role: "user" | "assistant" }) {
+  return (
+    <div
+      className={clsx(
+        "size-7 shrink-0 rounded-full grid place-items-center text-xs font-medium",
+        role === "user" ? "bg-indigo-600 text-white" : "bg-emerald-600 text-white"
+      )}
+      aria-hidden
+    >
+      {role === "user" ? "U" : "AI"}
+    </div>
+  );
+}
+
+function Bubble({
+  role,
+  children,
+}: {
+  role: "user" | "assistant";
+  children: React.ReactNode;
+}) {
+  const isUser = role === "user";
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+      transition={{ type: "spring", stiffness: 380, damping: 28, mass: 0.8 }}
+      className={clsx("flex items-start gap-3 max-w-[92%]", isUser ? "ml-auto" : "mr-auto")}
+    >
+      {!isUser && <Avatar role={role} />}
+      <div
+        className={clsx(
+          "rounded-2xl border px-3 py-2 text-sm shadow-sm",
+          isUser
+            ? "border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+            : "border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
+        )}
+      >
+        {children}
+      </div>
+      {isUser && <Avatar role={role} />}
+    </motion.div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
+      className="mr-auto flex items-center gap-2 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-500"
+    >
+      <span className="sr-only">AI is typing</span>
+      <span className="flex gap-1">
+        <span className="inline-block size-2 rounded-full bg-current opacity-60 animate-bounce"></span>
+        <span className="inline-block size-2 rounded-full bg-current opacity-60 animate-bounce [animation-delay:120ms]"></span>
+        <span className="inline-block size-2 rounded-full bg-current opacity-60 animate-bounce [animation-delay:240ms]"></span>
+      </span>
+    </motion.div>
+  );
+}
+
+/* =========================
+   App
+   ========================= */
 export default function App() {
-  /* Tema y lenguaje */
+  /* Tema e idioma */
   const { theme, toggle } = useDarkMode() as { theme: "dark" | "light"; toggle: () => void };
   const { lang, setLang } = useLang("en");
 
-  /* Estado del chat */
+  /* Chat */
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: t(lang, "chat.greeting") },
   ]);
   const [input, setInput] = useState<string>("");
   const [isTyping, setIsTyping] = useState<boolean>(false);
 
-  /* Gráficos generados */
+  /* Gráficos IA */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
 
-  /* Auto-scroll chat */
+  /* Autoscroll suave */
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom && endRef.current) {
+      endRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [messages, isTyping, lang]);
 
-  /* Hidratación desde localStorage */
+  /* Carga/guardado local */
   useEffect(() => {
     try {
       const m = localStorage.getItem(LS_MESSAGES);
@@ -124,7 +210,6 @@ export default function App() {
       }
     } catch {}
   }, []);
-  /* Guardado en localStorage */
   useEffect(() => {
     try {
       localStorage.setItem(LS_MESSAGES, JSON.stringify(messages));
@@ -136,7 +221,7 @@ export default function App() {
     } catch {}
   }, [generated]);
 
-  /* Datos del backend */
+  /* Datos backend */
   const { ventas, clientes, serieBar, kpis, loading, err } =
     (useSheetData() as UseSheetDataReturn) || {};
 
@@ -155,8 +240,7 @@ export default function App() {
   useEffect(() => {
     if (!mesSel && mesesDisponibles.length) setMesSel(mesesDisponibles.at(-1) ?? null);
   }, [mesesDisponibles, mesSel]);
-  const mesActivo =
-    mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
+  const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
   /* Pie por canal (mes activo) */
   const pieData = useMemo<{ name: string; value: number }[]>(() => {
@@ -227,7 +311,7 @@ export default function App() {
     fontSize: "0.875rem",
   };
 
-  /* Sugerencias localizadas */
+  /* Sugerencias */
   const SUGGESTIONS = [
     t(lang, "chat.example.1"),
     t(lang, "chat.example.2"),
@@ -239,47 +323,18 @@ export default function App() {
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       {/* ======== CLERK HARDENING (fondo opaco/contraste) ======== */}
       <style>{`
-        /* Backdrop más oscuro y con blur suave */
         :where(.cl-modalBackdrop){background:rgba(0,0,0,.6)!important;backdrop-filter:blur(3px)!important}
-
-        /* Tarjetas del modal (SignIn/SignUp) y popover del UserButton */
         :where(.cl-card,.cl-userButtonPopoverCard){
           background:#0b0b0e !important;
           border:1px solid #27272a !important;
           box-shadow:0 10px 40px rgba(0,0,0,.55) !important;
         }
-
-        /* Tipografías principales */
-        :where(.cl-headerTitle,.cl-headerSubtitle,.cl-text,.cl-formFieldLabel,.cl-userButtonPopoverActionButton){
-          color:#e5e7eb !important;
-        }
-
-        /* Inputs */
-        :where(.cl-input){
-          background:#0f0f14 !important;
-          border-color:#3f3f46 !important;
-          color:#e5e7eb !important;
-        }
-
-        /* Botones principales */
-        :where(.cl-buttonPrimary){
-          background:#111827 !important;
-          border-color:#1f2937 !important;
-          color:#f9fafb !important;
-        }
-
-        /* Botones sociales y secundarios */
-        :where(.cl-socialButtonsIconButton,.cl-button){
-          background:#0f172a !important;
-          border-color:#334155 !important;
-          color:#e5e7eb !important;
-        }
-
-        /* Divisores y links */
+        :where(.cl-headerTitle,.cl-headerSubtitle,.cl-text,.cl-formFieldLabel,.cl-userButtonPopoverActionButton){color:#e5e7eb !important}
+        :where(.cl-input){background:#0f0f14 !important;border-color:#3f3f46 !important;color:#e5e7eb !important}
+        :where(.cl-buttonPrimary){background:#111827 !important;border-color:#1f2937 !important;color:#f9fafb !important}
+        :where(.cl-socialButtonsIconButton,.cl-button){background:#0f172a !important;border-color:#334155 !important;color:#e5e7eb !important}
         :where(.cl-dividerLine){background:#27272a !important}
         :where(.cl-link){color:#93c5fd !important}
-
-        /* Overrides claros cuando el sitio está en modo claro */
         :root:not(.dark) :where(.cl-card,.cl-userButtonPopoverCard){background:#ffffff !important;border:1px solid #e5e7eb !important}
         :root:not(.dark) :where(.cl-input){background:#ffffff !important;border-color:#d4d4d8 !important;color:#111827 !important}
         :root:not(.dark) :where(.cl-buttonPrimary){background:#111827 !important;color:#f9fafb !important}
@@ -324,8 +379,8 @@ export default function App() {
 
             {/* Auth */}
             <SignedIn>
-  <UserButton afterSignOutUrl="/" />
-</SignedIn>
+              <UserButton afterSignOutUrl="/" />
+            </SignedIn>
             <SignedOut>
               <SignInButton mode="modal">
                 <button className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
@@ -406,28 +461,19 @@ export default function App() {
             </div>
 
             {/* Mensajes */}
-            <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
-              {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
-                    m.role === "user"
-                      ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                      : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
-                  }`}
-                >
-                  {m.content}
-                </div>
-              ))}
-
-              {/* Indicador de escritura */}
-              {isTyping && (
-                <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
-                  <span className="animate-bounce">●</span>
-                  <span className="animate-bounce [animation-delay:150ms]">●</span>
-                  <span className="animate-bounce [animation-delay:300ms]">●</span>
-                </div>
-              )}
+            <div
+              ref={chatRef}
+              className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh] scroll-smooth"
+            >
+              <AnimatePresence initial={false}>
+                {messages.map((m, i) => (
+                  <Bubble key={i} role={m.role}>
+                    {m.content}
+                  </Bubble>
+                ))}
+                {isTyping && <TypingIndicator key="typing" />}
+              </AnimatePresence>
+              <div ref={endRef} />
             </div>
           </div>
         </aside>
@@ -517,7 +563,9 @@ export default function App() {
 
             {/* Insights */}
             <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-              <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
+              <div className="font-medium text-zinc-800 dark:text-zinc-200">
+                {t(lang, "insights.title")}
+              </div>
               <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                 {kpis
                   ? t(lang, "insights.text", {
@@ -535,7 +583,9 @@ export default function App() {
             {generated.length > 0 && (
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="flex items-center justify-between">
-                  <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "ai.title")}</div>
+                  <div className="font-medium text-zinc-800 dark:text-zinc-200">
+                    {t(lang, "ai.title")}
+                  </div>
                   <button
                     onClick={() => setGenerated([])}
                     className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -547,11 +597,21 @@ export default function App() {
 
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
                   {generated.map((spec) => (
-                    <div key={spec.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                    <div
+                      key={spec.id}
+                      className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3"
+                    >
                       <div className="text-sm font-medium mb-2">{spec.title}</div>
-                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
+                      <DynamicChart
+                        spec={spec}
+                        ventas={ventas}
+                        serieBar={serieBar}
+                        mesActivo={mesActivo}
+                      />
                       {spec.notes && (
-                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>
+                        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                          {spec.notes}
+                        </div>
                       )}
                     </div>
                   ))}
