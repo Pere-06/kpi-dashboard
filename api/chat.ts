@@ -5,18 +5,12 @@ import { z } from "zod";
 
 /* =============== Tipos/Esquemas =============== */
 const ChartType = z.enum(["line", "bar", "area", "pie", "scatter"]);
-const Intent = z.enum([
-  "ventas_por_canal_mes",
-  "ventas_vs_gastos_mes",
-  "evolucion_ventas_n_meses",
-  "top_canales",
-]);
 
 const ChartSpecSchema = z.object({
   id: z.string(),
   type: ChartType,
   title: z.string(),
-  intent: Intent,
+  intent: z.string(), // ya no restringido
   notes: z.string().optional(),
   params: z.record(z.any()).optional(),
 });
@@ -40,14 +34,9 @@ export default async function handler(req: Request) {
   if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 
   if (!OPENAI_API_KEY) {
-    return new Response(
-      JSON.stringify({
-        reply:
-          "⚠️ Falta la clave de OpenAI en el servidor. Añade OPENAI_API_KEY en Vercel → Project → Settings → Environment Variables.",
-        specs: [],
-      }),
-      { headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ reply: "⚠️ Falta OPENAI_API_KEY", specs: [] }), {
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   try {
@@ -55,40 +44,33 @@ export default async function handler(req: Request) {
     const { messages, mesActivo, mesesDisponibles, lang, maxCharts } = PayloadSchema.parse(body);
 
     const sys = `
-You are an analytics assistant for a startup dashboard. Be concise, friendly, and helpful.
-You ALWAYS return a JSON object like:
-{
-  "assistant": "<short helpful reply in the same language as user>",
-  "specs": [ ChartSpec... ]
-}
-Where ChartSpec is:
-{ "id":string, "type":"line|bar|area|pie|scatter", "title":string, "intent": one of
-  ["ventas_por_canal_mes","ventas_vs_gastos_mes","evolucion_ventas_n_meses","top_canales"],
-  "params":object?, "notes":string? }
+You are an **analytics assistant** for a KPI dashboard. Your job is to:
+1. Interpret user requests flexibly.
+2. If the request is clear, generate one or more ChartSpec objects.
+3. If the request is ambiguous or missing details (e.g. chart type, period), ask the user a clarifying question and return specs: [].
+4. Adapt parameters like number of months (3, 6, 12...), top N channels, specific dates, etc. Do NOT reject unless truly impossible.
+5. Always localize replies (English/Spanish).
+6. Return ONLY JSON: { "assistant": string, "specs": ChartSpec[] }
 
-Rules:
-- If the user asks for multiple charts, return several specs (up to ${maxCharts}).
-- If months are not specified:
-  - "evolucion_ventas_n_meses": use params.months=6
-  - "ventas_vs_gastos_mes": use params.months=8 (series)
-  - "top_canales": use params.topN=5
-- For "ventas_por_canal_mes", use the active month if available; otherwise the most recent.
-- Titles must be short, clear, and localized (ES or EN).
-- NEVER invent unknown data fields. The frontend knows how to render by intent.
-- If the request isn't about data/graphs, return specs: [] but still answer politely.
-- IDs must be unique.
+ChartSpec = {
+  "id": string,
+  "type": "line|bar|area|pie|scatter",
+  "title": string,
+  "intent": string,   // describe the goal, flexible (e.g. "evolucion_ventas", "comparativa_canales", "custom")
+  "params": object,   // flexible (e.g. { "months": 3, "topN": 5, "channel": "email" })
+  "notes": string?    // optional note to user
+}
 
 Context:
-- mesActivo: ${mesActivo ?? "null"}
-- mesesDisponibles: ${JSON.stringify(mesesDisponibles ?? [])}
-- language (ui): ${lang}
+- Active month: ${mesActivo ?? "null"}
+- Available months: ${JSON.stringify(mesesDisponibles ?? [])}
+- Max charts allowed: ${maxCharts}
+- UI language: ${lang}
 `;
 
     const user = `
-Conversation (last messages):
+Conversation:
 ${messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n")}
-
-Return ONLY a JSON object with keys "assistant" and "specs".
 `;
 
     const r = await fetch(`${OPENAI_BASE}/chat/completions`, {
@@ -103,7 +85,7 @@ Return ONLY a JSON object with keys "assistant" and "specs".
           { role: "system", content: sys },
           { role: "user", content: user },
         ],
-        temperature: 0.2,
+        temperature: 0.3,
         response_format: { type: "json_object" },
       }),
     });
@@ -133,8 +115,8 @@ Return ONLY a JSON object with keys "assistant" and "specs".
         ChartSpecSchema.parse({
           id: s.id || uid(),
           type: s.type,
-          title: s.title || "Gráfico",
-          intent: s.intent,
+          title: s.title || "Chart",
+          intent: s.intent || "custom",
           params: s.params ?? {},
           notes: s.notes,
         })
