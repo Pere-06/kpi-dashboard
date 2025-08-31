@@ -1,7 +1,6 @@
 
 // backend/prisma/seed.ts
-import { prisma } from "../src/prisma";
-
+import { prisma } from '../src/prisma.js';
 async function main() {
   const clerkUserId = process.env.SEED_CLERK_USER_ID;
   if (!clerkUserId) {
@@ -14,6 +13,13 @@ async function main() {
     update: {},
     create: { clerkUserId },
   });
+
+  const org = await prisma.organization.findFirst({ where: { slug: 'demo' } });
+// o el criterio que uses realmente
+
+if (!org) {
+  throw new Error('Seed failed: organization not found');
+}
 
   // 2) Organización (usa id/nombre de ENV si los pones)
   const seedOrgId = process.env.SEED_ORG_ID;          // opcional (UUID)

@@ -1,6 +1,6 @@
 // backend/src/crypto.ts
 import crypto from "crypto";
-import { ENV } from "./env";
+import { env } from './env.js';
 
 const KEY = ENV.DATA_KEY_BASE64 ? Buffer.from(ENV.DATA_KEY_BASE64, "base64") : null;
 

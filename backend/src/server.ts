@@ -4,8 +4,8 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import sensible from "@fastify/sensible";
 import rateLimit from "@fastify/rate-limit";
-import { ENV } from "./env";
-import { connectionsRoutes } from "./routes/connections";
+import { env } from './env.js';
+import connectionsRoutes from './routes/connections.js';
 
 const app = Fastify({ logger: true });
 

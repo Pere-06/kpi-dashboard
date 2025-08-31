@@ -1,8 +1,8 @@
 // backend/src/auth.ts
 import { verifyToken } from "@clerk/clerk-sdk-node";
 import type { FastifyRequest, FastifyReply } from "fastify";
-import { ENV } from "./env";
-import { prisma } from "./prisma";
+import { env } from './env.js';
+import { prisma } from './prisma.js';
 
 declare module "fastify" {
   interface FastifyRequest { auth?: { userId: string }; orgId?: string; role?: string; }

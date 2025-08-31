@@ -1,9 +1,8 @@
 // backend/src/routes/connections.ts
-import { FastifyInstance } from "fastify";
-import { prisma } from "../prisma";
-import { requireOrg } from "../auth";
-import { CreateConnectionSchema, UpdateConnectionSchema } from "../schemas/connections";
-import { seal } from "../crypto";
+import { prisma } from '../prisma.js';
+import { requireAuth } from '../auth.js';
+import { connectionsSchema } from '../schemas/connections.js';
+import { encrypt, decrypt } from '../crypto.js';
 
 export async function connectionsRoutes(app: FastifyInstance) {
   app.get("/api/connections", { preHandler: requireOrg }, async (req, reply) => {
