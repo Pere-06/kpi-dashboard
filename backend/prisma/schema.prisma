@@ -1,0 +1,89 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========== MODELOS ========== 
+
+model User {
+  id           String       @id @default(cuid())
+  clerkUserId  String       @unique
+  memberships  Membership[]
+  createdAt    DateTime     @default(now())
+}
+
+model Organization {
+  id           String        @id @default(uuid()) @db.Uuid
+  name         String
+  memberships  Membership[]
+  connections  Connection[]
+  datasets     Dataset[]
+  createdAt    DateTime      @default(now())
+}
+
+model Membership {
+  id      String       @id @default(cuid())
+  userId  String
+  orgId   String       @db.Uuid
+  role    String
+
+  user    User         @relation(fields: [userId], references: [id])
+  org     Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([userId, orgId])
+}
+
+model Connection {
+  id          String       @id @default(cuid())
+  orgId       String       @db.Uuid
+  org         Organization @relation(fields: [orgId], references: [id])
+
+  provider    String       // 'csv','excel','airtable','gsheets',...
+  type        String       // 'oauth','api_key','file'
+  name        String
+  config      Json         // baseId, table, sheetId, cursor...
+  secretEnc   String?      // credenciales cifradas
+  status      String       // 'active','error','paused'
+  lastSyncAt  DateTime?
+  createdAt   DateTime     @default(now())
+
+  jobs        SyncJob[]
+
+  @@index([orgId])
+}
+
+model Dataset {
+  id          String       @id @default(cuid())
+  orgId       String       @db.Uuid
+  org         Organization @relation(fields: [orgId], references: [id])
+
+  name        String
+  schemaJson  Json
+  storageRef  String?
+  rowCount    Int          @default(0)
+  createdAt   DateTime     @default(now())
+
+  @@index([orgId])
+}
+
+model SyncJob {
+  id           String      @id @default(cuid())
+  orgId        String      @db.Uuid
+
+  connectionId String
+  connection   Connection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  status       String      // 'queued','running','success','failed'
+  detail       String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  @@index([orgId])
+  @@index([connectionId])
+}
