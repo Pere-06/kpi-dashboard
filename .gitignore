@@ -1,0 +1,29 @@
+# Node
+node_modules/
+npm-debug.log*
+*.log
+
+# Monorepo locks
+package-lock.json
+kpi_dashboard/package-lock.json
+backend/package-lock.json
+
+# Build
+dist/
+backend/dist/
+
+# IDE
+.vscode/
+
+# Front env (no subir)
+kpi_dashboard/.env*
+!kpi_dashboard/.env.example
+
+# Backend env (no subir)
+backend/.env*
+!backend/.env.example
+
+# Prisma sqlite (si lo usaste alguna vez)
+backend/prisma/dev.db
+backend/prisma/*.db-journal
+.Rhistory
