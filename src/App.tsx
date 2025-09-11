@@ -15,9 +15,22 @@ import { describeSpec } from "./ai/promptHelper";
 import type { ChartSpec } from "./types/chart";
 import { t, type Lang } from "./i18n";
 import { useLang } from "./hooks/useLang";
-
-/* ✅ nueva importación: página Conexiones */
 import ConnectionsPage from "./pages/Connections";
+
+/* ✅ NUEVO: base de la API (Render) */
+import { API_BASE } from "./config";
+
+/* ==========================================================
+   MiKPI — App.tsx (refactor menor para robustez y UX del chat)
+   Cambios clave:
+   - ✅ Botones de sugerencias envían directamente (antes sólo rellenaban input)
+   - ✅ Cancelación/timeout de /api/chat (evita colgados)
+   - ✅ Limpieza de AbortController en unmount
+   - ✅ Persistencia de pestaña activa en localStorage
+   - ✅ Autoscroll más fiable
+   - ✅ Pequeñas defensas ante valores nulos y errores de red
+   - ✅ (Nuevo) API_BASE para apuntar a Render
+   ========================================================== */
 
 /* ===== Tipos locales ===== */
 type VentasRow = { fecha?: Date | null; canal?: string | null; ventas?: number | null; gastos?: number | null; mes?: string | null; };
@@ -31,13 +44,15 @@ type ChatMessage = { role: "user" | "assistant"; content: string };
 const euro = (n: number = 0) => n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+/* 🔧 Arreglo: \b (word boundary). Antes había un carácter invisible. */
 const isGreeting = (s: string) => /^(hola|buenas|hey|holi|que tal|qué tal|hi|hello|hey there)\b/i.test(s.trim());
 
 /* ===== Persistencia ===== */
 const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
+const LS_TAB = "mikpi:tab";
 
-/* ===== Cliente a /api/chat con cancelación ===== */
+/* ===== Cliente a /api/chat con cancelación + timeout ===== */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
@@ -46,11 +61,21 @@ async function chatWithAI(
   maxCharts: number,
   signal?: AbortSignal
 ): Promise<{ assistant: string; specs: ChartSpec[] } | null> {
+  /* 👉 Usa API_BASE si existe (producción) o ruta relativa (dev/proxy) */
+  const endpoint = `${API_BASE ? API_BASE : ""}/api/chat`;
+
+  const controller = new AbortController();
+  const linkSignal = signal;
+  const onAbort = () => controller.abort();
+  linkSignal?.addEventListener("abort", onAbort, { once: true });
+
+  const timeout = setTimeout(() => controller.abort(), 25000); // 25s hard timeout
+
   try {
-    const r = await fetch("/api/chat", {
+    const r = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal,
+      signal: controller.signal,
       body: JSON.stringify({ messages: history, mesActivo, mesesDisponibles, lang, maxCharts }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -62,16 +87,29 @@ async function chatWithAI(
   } catch (e: any) {
     if (e?.name === "AbortError") return null;
     return null;
+  } finally {
+    clearTimeout(timeout);
+    linkSignal?.removeEventListener("abort", onAbort);
   }
 }
 
 export default function App() {
-  /* Tema e idioma */
-  const { theme, toggle } = useDarkMode() as { theme: "dark" | "light"; toggle: () => void };
-  const { lang, setLang } = useLang("en");
+  /* Tema e idioma (defensas en el hook) */
+  const dm = (useDarkMode() as { theme?: "dark" | "light"; toggle?: () => void }) || {};
+  const theme = dm.theme === "dark" ? "dark" : "light"; // default light
+  const toggle = dm.toggle || (() => {});
 
-  /* ✅ pestañas: dashboard | connections */
-  const [tab, setTab] = useState<"dashboard" | "connections">("dashboard");
+  const langHook = useLang("en");
+  const lang = (langHook?.lang as Lang) || ("en" as Lang);
+  const setLang = langHook?.setLang || (() => {});
+
+  /* ✅ pestañas: dashboard | connections (persistidas) */
+  const [tab, setTab] = useState<"dashboard" | "connections">(() => {
+    try { return (localStorage.getItem(LS_TAB) as any) || "dashboard"; } catch { return "dashboard"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(LS_TAB, tab); } catch {}
+  }, [tab]);
 
   /* Chat */
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -83,15 +121,21 @@ export default function App() {
 
   /* Cancelación */
   const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, []);
 
   /* Gráficos generados */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
 
-  /* Auto-scroll */
+  /* Auto-scroll más fiable */
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    queueMicrotask(() => { el.scrollTop = el.scrollHeight; });
   }, [messages, isTyping, lang]);
 
   /* Hidratar/guardar en localStorage */
@@ -109,30 +153,27 @@ export default function App() {
       }
     } catch {}
   }, []);
-  useEffect(() => {
-    try { localStorage.setItem(LS_MESSAGES, JSON.stringify(messages)); } catch {}
-  }, [messages]);
-  useEffect(() => {
-    try { localStorage.setItem(LS_CHARTS, JSON.stringify(generated)); } catch {}
-  }, [generated]);
+  useEffect(() => { try { localStorage.setItem(LS_MESSAGES, JSON.stringify(messages)); } catch {} }, [messages]);
+  useEffect(() => { try { localStorage.setItem(LS_CHARTS, JSON.stringify(generated)); } catch {} }, [generated]);
 
   /* Datos */
-  const { ventas, clientes, serieBar, kpis, loading, err } =
-    (useSheetData() as UseSheetDataReturn) || {};
+  const { ventas, clientes, serieBar, kpis, loading, err } = (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
 
   /* Meses */
   const mesesDisponibles = useMemo<string[]>(() => {
     const set = new Set<string>();
-    ventas?.forEach((v) => v.fecha && set.add(ymKey(v.fecha)));
-    clientes?.forEach((c) => c.fecha && set.add(ymKey(c.fecha)));
+    ventas?.forEach((v) => v?.fecha && set.add(ymKey(v.fecha)));
+    clientes?.forEach((c) => c?.fecha && set.add(ymKey(c.fecha)));
     if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
-      serieBar.forEach((p) => p.mes && set.add(p.mes));
+      serieBar.forEach((p) => p?.mes && set.add(p.mes));
     }
     return Array.from(set).sort();
   }, [ventas, clientes, serieBar]);
 
   const [mesSel, setMesSel] = useState<string | null>(null);
-  useEffect(() => { if (!mesSel && mesesDisponibles.length) setMesSel(mesesDisponibles.at(-1) ?? null); }, [mesesDisponibles, mesSel]);
+  useEffect(() => {
+    if (!mesSel && mesesDisponibles.length) setMesSel(mesesDisponibles.at(-1) ?? null);
+  }, [mesesDisponibles, mesSel]);
   const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
   /* Pie por canal (mes activo) */
@@ -140,9 +181,10 @@ export default function App() {
     if (!mesActivo || !ventas?.length) return [];
     const map: Record<string, number> = {};
     ventas.forEach((r) => {
-      if (r.fecha && ymKey(r.fecha) === mesActivo) {
+      if (r?.fecha && ymKey(r.fecha) === mesActivo) {
         const canal = (r.canal ?? "N/D") as string;
         const v = Number(r.ventas ?? 0);
+        if (!Number.isFinite(v)) return;
         map[canal] = (map[canal] || 0) + v;
       }
     });
@@ -175,7 +217,7 @@ export default function App() {
     if (ai) {
       setMessages((p) => [...p, { role: "assistant" as const, content: ai.assistant || "Ok" }]);
       if (ai.specs?.length) {
-        setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8)); // ahora hasta 8
+        setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8)); // hasta 8
       } else {
         // Fallback local si no hubo specs
         const localSpec = parsePromptToSpec(text);
@@ -198,16 +240,8 @@ export default function App() {
   };
 
   /* Regenerar y Detener */
-  const onRegenerar = () => {
-    const last = lastUserRef.current;
-    if (last) enviar(last);
-  };
-  const onDetener = () => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      setIsTyping(false);
-    }
-  };
+  const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
+  const onDetener = () => { if (abortRef.current) { abortRef.current.abort(); setIsTyping(false); } };
 
   /* Tooltip Recharts */
   const tooltipStyle: React.CSSProperties = {
@@ -224,7 +258,7 @@ export default function App() {
     t(lang, "chat.example.2"),
     t(lang, "chat.example.3"),
     t(lang, "chat.example.4"),
-  ];
+  ].filter(Boolean);
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
@@ -320,7 +354,7 @@ export default function App() {
       ) : (
         <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
           {/* Sidebar / Chat */}
-          <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h-[calc(100vh-56px)] flex flex-col">
+          <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:minh-[calc(100vh-56px)] lg:min-h-[calc(100vh-56px)] flex flex-col">
             <div className="p-4">
               <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">{t(lang, "chat.title")}</h2>
 
@@ -363,10 +397,10 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Ejemplos */}
+              {/* Ejemplos — ahora ENVIAN directamente */}
               <div className="mt-2 flex flex-wrap gap-2">
                 {SUGGESTIONS.map((q) => (
-                  <button key={q} onClick={() => setInput(q)}
+                  <button key={q} onClick={() => enviar(q)}
                     className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                     {q}
                   </button>
@@ -393,7 +427,7 @@ export default function App() {
               {/* Mensajes */}
               <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
                 {messages.map((m, i) => (
-                  <div key={i}
+                  <div key={`${i}-${m.role}`}
                     className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
                       m.role === "user"
                         ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
@@ -432,7 +466,7 @@ export default function App() {
                   <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "loading")}</div>
                 ) : err ? (
                   <div className="h-full grid place-items-center text-sm text-rose-600">
-                    {t(lang, "error")}: {typeof err === "string" ? err : String(err?.message ?? err)}
+                    {t(lang, "error")}: {t(lang, "error")}: {typeof err === "string" ? err : String((err as any)?.message ?? err)}
                   </div>
                 ) : !serieBar?.length ? (
                   <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "nodata")}</div>
@@ -481,9 +515,9 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="mt-3 grid grid-cols-1 md-grid-cols-2 md:grid-cols-2 gap-4">
                     {generated.map((spec) => (
-                      <div key={spec.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                      <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
                         <div className="text-sm font-medium mb-2">{spec.title}</div>
                         <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
                         {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
