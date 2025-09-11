@@ -11,26 +11,14 @@ import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
 import { parsePromptToSpec } from "./ai/parsePrompt";
-import { describeSpec } from "./ai/promptHelper";
+// import { describeSpec } from "./ai/promptHelper"; // ya no lo usamos para forzar idioma
 import type { ChartSpec } from "./types/chart";
 import { t, type Lang } from "./i18n";
 import { useLang } from "./hooks/useLang";
-import ConnectionsPage from "./pages/Connections";
+import SettingsDrawer from "./components/SettingsDrawer";
 
-/* ✅ NUEVO: base de la API (Render) */
+/* ✅ API base (Render) */
 import { API_BASE } from "./config";
-
-/* ==========================================================
-   MiKPI — App.tsx (refactor menor para robustez y UX del chat)
-   Cambios clave:
-   - ✅ Botones de sugerencias envían directamente (antes sólo rellenaban input)
-   - ✅ Cancelación/timeout de /api/chat (evita colgados)
-   - ✅ Limpieza de AbortController en unmount
-   - ✅ Persistencia de pestaña activa en localStorage
-   - ✅ Autoscroll más fiable
-   - ✅ Pequeñas defensas ante valores nulos y errores de red
-   - ✅ (Nuevo) API_BASE para apuntar a Render
-   ========================================================== */
 
 /* ===== Tipos locales ===== */
 type VentasRow = { fecha?: Date | null; canal?: string | null; ventas?: number | null; gastos?: number | null; mes?: string | null; };
@@ -44,13 +32,11 @@ type ChatMessage = { role: "user" | "assistant"; content: string };
 const euro = (n: number = 0) => n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 const ymKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-/* 🔧 Arreglo: \b (word boundary). Antes había un carácter invisible. */
 const isGreeting = (s: string) => /^(hola|buenas|hey|holi|que tal|qué tal|hi|hello|hey there)\b/i.test(s.trim());
 
 /* ===== Persistencia ===== */
 const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
-const LS_TAB = "mikpi:tab";
 
 /* ===== Cliente a /api/chat con cancelación + timeout ===== */
 async function chatWithAI(
@@ -61,15 +47,13 @@ async function chatWithAI(
   maxCharts: number,
   signal?: AbortSignal
 ): Promise<{ assistant: string; specs: ChartSpec[] } | null> {
-  /* 👉 Usa API_BASE si existe (producción) o ruta relativa (dev/proxy) */
   const endpoint = `${API_BASE ? API_BASE : ""}/api/chat`;
 
   const controller = new AbortController();
-  const linkSignal = signal;
   const onAbort = () => controller.abort();
-  linkSignal?.addEventListener("abort", onAbort, { once: true });
+  signal?.addEventListener("abort", onAbort, { once: true });
 
-  const timeout = setTimeout(() => controller.abort(), 25000); // 25s hard timeout
+  const timeout = setTimeout(() => controller.abort(), 25000);
 
   try {
     const r = await fetch(endpoint, {
@@ -81,7 +65,7 @@ async function chatWithAI(
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     return {
-      assistant: typeof data.reply === "string" ? data.reply : (data.assistant || "Ok"),
+      assistant: typeof data.reply === "string" ? data.reply : (data.assistant || (lang === "en" ? "Ok." : "Vale.")),
       specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
     };
   } catch (e: any) {
@@ -89,27 +73,21 @@ async function chatWithAI(
     return null;
   } finally {
     clearTimeout(timeout);
-    linkSignal?.removeEventListener("abort", onAbort);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
 export default function App() {
-  /* Tema e idioma (defensas en el hook) */
+  /* Tema e idioma */
   const dm = (useDarkMode() as { theme?: "dark" | "light"; toggle?: () => void }) || {};
-  const theme = dm.theme === "dark" ? "dark" : "light"; // default light
+  const theme = dm.theme === "dark" ? "dark" : "light";
   const toggle = dm.toggle || (() => {});
-
   const langHook = useLang("en");
   const lang = (langHook?.lang as Lang) || ("en" as Lang);
   const setLang = langHook?.setLang || (() => {});
 
-  /* ✅ pestañas: dashboard | connections (persistidas) */
-  const [tab, setTab] = useState<"dashboard" | "connections">(() => {
-    try { return (localStorage.getItem(LS_TAB) as any) || "dashboard"; } catch { return "dashboard"; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem(LS_TAB, tab); } catch {}
-  }, [tab]);
+  /* Drawer lateral (ajustes + conexiones) */
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   /* Chat */
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -121,16 +99,12 @@ export default function App() {
 
   /* Cancelación */
   const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => {
-    return () => {
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, []);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   /* Gráficos generados */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
 
-  /* Auto-scroll más fiable */
+  /* Auto-scroll */
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatRef.current;
@@ -138,7 +112,7 @@ export default function App() {
     queueMicrotask(() => { el.scrollTop = el.scrollHeight; });
   }, [messages, isTyping, lang]);
 
-  /* Hidratar/guardar en localStorage */
+  /* Hidratar/guardar */
   useEffect(() => {
     try {
       const m = localStorage.getItem(LS_MESSAGES);
@@ -157,7 +131,8 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem(LS_CHARTS, JSON.stringify(generated)); } catch {} }, [generated]);
 
   /* Datos */
-  const { ventas, clientes, serieBar, kpis, loading, err } = (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
+  const { ventas, clientes, serieBar, kpis, loading, err } =
+    (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
 
   /* Meses */
   const mesesDisponibles = useMemo<string[]>(() => {
@@ -207,7 +182,7 @@ export default function App() {
     }
 
     // Cancelar petición previa, si la hubiera
-    if (abortRef.current) abortRef.current.abort();
+    abortRef.current?.abort();
     abortRef.current = new AbortController();
 
     setIsTyping(true);
@@ -215,15 +190,18 @@ export default function App() {
     setIsTyping(false);
 
     if (ai) {
-      setMessages((p) => [...p, { role: "assistant" as const, content: ai.assistant || "Ok" }]);
+      setMessages((p) => [...p, { role: "assistant" as const, content: ai.assistant || (lang === "en" ? "Got it." : "Entendido.") }]);
       if (ai.specs?.length) {
-        setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8)); // hasta 8
+        setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8));
       } else {
         // Fallback local si no hubo specs
         const localSpec = parsePromptToSpec(text);
         if (localSpec) {
           setGenerated((prev) => [localSpec, ...prev].slice(0, 8));
-          setMessages((p) => [...p, { role: "assistant", content: describeSpec(localSpec) }]);
+          setMessages((p) => [
+            ...p,
+            { role: "assistant", content: lang === "en" ? "Generated a chart based on your request." : "He generado un gráfico según tu petición." },
+          ]);
         }
       }
       return;
@@ -233,7 +211,10 @@ export default function App() {
     const localSpec = parsePromptToSpec(text);
     if (localSpec) {
       setGenerated((prev) => [localSpec, ...prev].slice(0, 8));
-      setMessages((p) => [...p, { role: "assistant", content: describeSpec(localSpec) }]);
+      setMessages((p) => [
+        ...p,
+        { role: "assistant", content: lang === "en" ? "Generated a chart based on your request." : "He generado un gráfico según tu petición." },
+      ]);
     } else {
       setMessages((p) => [...p, { role: "assistant", content: t(lang, "chat.helper") }]);
     }
@@ -241,7 +222,7 @@ export default function App() {
 
   /* Regenerar y Detener */
   const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
-  const onDetener = () => { if (abortRef.current) { abortRef.current.abort(); setIsTyping(false); } };
+  const onDetener = () => { abortRef.current?.abort(); setIsTyping(false); };
 
   /* Tooltip Recharts */
   const tooltipStyle: React.CSSProperties = {
@@ -282,35 +263,21 @@ export default function App() {
       <header className="sticky top-0 z-40 backdrop-blur bg-white/60 dark:bg-zinc-950/60 border-b border-zinc-200 dark:border-zinc-800 shadow-sm">
         <div className="mx-auto max-w-7xl h-14 px-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
+            {/* Botón hamburguesa para abrir el drawer */}
+            <button
+              onClick={() => setDrawerOpen(true)}
+              className="mr-2 rounded-lg p-2 border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              aria-label="Open settings"
+              title={lang === "en" ? "Open settings" : "Abrir ajustes"}
+            >
+              ☰
+            </button>
+
             <img src="/vite.svg" alt="Logo" className="h-6 w-6" />
             <span className="font-semibold text-zinc-800 dark:text-zinc-200 text-sm">
               {t(lang, "app.title")}
             </span>
           </div>
-
-          {/* ✅ pestañas */}
-          <nav className="hidden sm:flex items-center gap-1">
-            <button
-              onClick={() => setTab("dashboard")}
-              className={`px-3 py-1.5 rounded-lg text-sm border ${
-                tab === "dashboard"
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-transparent"
-                  : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              }`}
-            >
-              Dashboard
-            </button>
-            <button
-              onClick={() => setTab("connections")}
-              className={`px-3 py-1.5 rounded-lg text-sm border ${
-                tab === "connections"
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-transparent"
-                  : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              }`}
-            >
-              Conexiones
-            </button>
-          </nav>
 
           <div className="flex items-center gap-3">
             <label className="sr-only" htmlFor="lang">{t(lang, "lang.label")}</label>
@@ -346,190 +313,194 @@ export default function App() {
         </div>
       </header>
 
-      {/* Contenido por pestaña */}
-      {tab === "connections" ? (
-        <div className="mx-auto max-w-7xl p-4">
-          <ConnectionsPage />
-        </div>
-      ) : (
-        <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
-          {/* Sidebar / Chat */}
-          <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:minh-[calc(100vh-56px)] lg:min-h-[calc(100vh-56px)] flex flex-col">
-            <div className="p-4">
-              <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">{t(lang, "chat.title")}</h2>
+      {/* Layout principal */}
+      <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
+        {/* Sidebar / Chat */}
+        <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h-[calc(100vh-56px)] flex flex-col">
+          <div className="p-4">
+            <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">{t(lang, "chat.title")}</h2>
 
-              {/* Input + acciones */}
-              <div className="mt-3 flex gap-2">
-                <textarea
-                  className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none resize-y"
-                  placeholder={t(lang, "chat.placeholder")}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
-                  aria-label={t(lang, "chat.title")}
-                />
-                <button
-                  onClick={() => enviar()}
-                  disabled={!input.trim() || isTyping}
-                  className="rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {t(lang, "send")}
-                </button>
-              </div>
-
-              {/* Acciones: Regenerar / Detener */}
-              <div className="mt-2 flex gap-2">
-                <button
-                  onClick={onRegenerar}
-                  disabled={!lastUserRef.current || isTyping}
-                  className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
-                  title="Regenerar última petición"
-                >
-                  🔁 {lang === "en" ? "Regenerate" : "Regenerar"}
-                </button>
-                <button
-                  onClick={onDetener}
-                  disabled={!isTyping}
-                  className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
-                  title="Detener respuesta"
-                >
-                  ⏹ {lang === "en" ? "Stop" : "Detener"}
-                </button>
-              </div>
-
-              {/* Ejemplos — ahora ENVIAN directamente */}
-              <div className="mt-2 flex flex-wrap gap-2">
-                {SUGGESTIONS.map((q) => (
-                  <button key={q} onClick={() => enviar(q)}
-                    className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                    {q}
-                  </button>
-                ))}
-              </div>
-
-              {/* Mes */}
-              <div className="mt-4">
-                <label className="text-xs text-zinc-500 dark:text-zinc-400">{t(lang, "month.filter")}</label>
-                <select
-                  className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
-                  value={mesActivo || ""}
-                  onChange={(e) => setMesSel(e.target.value)}
-                  disabled={!mesesDisponibles.length}
-                >
-                  {mesesDisponibles.length === 0 ? (
-                    <option value="">{t(lang, "loading")}</option>
-                  ) : (
-                    mesesDisponibles.map((m) => <option key={m} value={m}>{m}</option>)
-                  )}
-                </select>
-              </div>
-
-              {/* Mensajes */}
-              <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
-                {messages.map((m, i) => (
-                  <div key={`${i}-${m.role}`}
-                    className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
-                      m.role === "user"
-                        ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                        : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
-                    }`}>
-                    {m.content}
-                  </div>
-                ))}
-                {isTyping && (
-                  <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
-                    <span className="animate-bounce">●</span>
-                    <span className="animate-bounce [animation-delay:150ms]">●</span>
-                    <span className="animate-bounce [animation-delay:300ms]">●</span>
-                  </div>
-                )}
-              </div>
+            {/* Input + acciones */}
+            <div className="mt-3 flex gap-2">
+              <textarea
+                className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none resize-y"
+                placeholder={t(lang, "chat.placeholder")}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
+                aria-label={t(lang, "chat.title")}
+              />
+              <button
+                onClick={() => enviar()}
+                disabled={!input.trim() || isTyping}
+                className="rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t(lang, "send")}
+              </button>
             </div>
-          </aside>
 
-          {/* Panel principal (dashboard) */}
-          <main className="overflow-y-auto">
-            <div className="p-4 lg:p-6 space-y-4">
-              {/* KPIs */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <KpiCard label={t(lang, "kpi.salesMonth")} value={kpis ? euro(kpis.ventasMes) : "—"}
-                         delta={kpis ? pct(kpis.deltaVentas) : "—"} positive={(kpis?.deltaVentas ?? 0) >= 0} loading={loading} />
-                <KpiCard label={t(lang, "kpi.newCustomers")} value={kpis?.nuevosMes ?? "—"}
-                         delta={kpis ? pct(kpis.deltaNuevos) : "—"} positive={(kpis?.deltaNuevos ?? 0) >= 0} loading={loading} />
-                <KpiCard label={t(lang, "kpi.avgTicket")} value={kpis ? euro(kpis.ticketMedio) : "—"}
-                         delta={kpis ? pct(kpis.deltaTicket) : "—"} positive={(kpis?.deltaTicket ?? 0) >= 0} loading={loading} />
-              </div>
+            {/* Acciones: Regenerar / Detener */}
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={onRegenerar}
+                disabled={!lastUserRef.current || isTyping}
+                className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+                title={lang === "en" ? "Regenerate last request" : "Regenerar última petición"}
+              >
+                🔁 {lang === "en" ? "Regenerate" : "Regenerar"}
+              </button>
+              <button
+                onClick={onDetener}
+                disabled={!isTyping}
+                className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+                title={lang === "en" ? "Stop response" : "Detener respuesta"}
+              >
+                ⏹ {lang === "en" ? "Stop" : "Detener"}
+              </button>
+            </div>
 
-              {/* Gráfico de barras por defecto */}
-              <ChartCard title={t(lang, "chart.bar.title")}>
-                {loading ? (
-                  <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "loading")}</div>
-                ) : err ? (
-                  <div className="h-full grid place-items-center text-sm text-rose-600">
-                    {t(lang, "error")}: {t(lang, "error")}: {typeof err === "string" ? err : String((err as any)?.message ?? err)}
-                  </div>
-                ) : !serieBar?.length ? (
-                  <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "nodata")}</div>
+            {/* Ejemplos — ENVIAN directamente */}
+            <div className="mt-2 flex flex-wrap gap-2">
+              {SUGGESTIONS.map((q) => (
+                <button key={q} onClick={() => enviar(q)}
+                  className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  {q}
+                </button>
+              ))}
+            </div>
+
+            {/* Mes */}
+            <div className="mt-4">
+              <label className="text-xs text-zinc-500 dark:text-zinc-400">{t(lang, "month.filter")}</label>
+              <select
+                className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
+                value={mesActivo || ""}
+                onChange={(e) => setMesSel(e.target.value)}
+                disabled={!mesesDisponibles.length}
+              >
+                {mesesDisponibles.length === 0 ? (
+                  <option value="">{t(lang, "loading")}</option>
                 ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={serieBar} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
-                      <XAxis dataKey="mes" stroke="currentColor" />
-                      <YAxis stroke="currentColor" />
-                      <Tooltip contentStyle={tooltipStyle} />
-                      <Legend />
-                      <Bar dataKey="gastos" name={lang === "en" ? "Expenses" : "Gastos"} radius={[6, 6, 0, 0]}
-                           fill={theme === "dark" ? "#22c55e" : "#16a34a"} isAnimationActive animationDuration={800} />
-                      <Bar dataKey="ventas" name={lang === "en" ? "Sales" : "Ventas"} radius={[6, 6, 0, 0]}
-                           fill={theme === "dark" ? "#3b82f6" : "#2563eb"} isAnimationActive animationDuration={800} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                  mesesDisponibles.map((m) => <option key={m} value={m}>{m}</option>)
                 )}
-              </ChartCard>
+              </select>
+            </div>
 
-              {/* Pie por canal */}
-              <ChartCard title={`${t(lang, "pie.title.prefix")}${mesActivo || "—"}`}
-                         footer={lang === "en" ? "Count of operations per channel in the selected month." : "Cuenta de operaciones por canal en el mes seleccionado."}>
-                <ChannelPie key={mesActivo || "none"} data={pieData} loading={loading} error={err} />
-              </ChartCard>
-
-              {/* Insights */}
-              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-                <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
-                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                  {kpis
-                    ? t(lang, "insights.text", { sales: euro(kpis.ventasMes), delta: pct(kpis.deltaVentas), ticket: euro(kpis.ticketMedio) })
-                    : lang === "en" ? "Load your data to see insights." : "Carga tus datos para ver insights."}
-                </p>
-              </div>
-
-              {/* Gráficos de IA */}
-              {generated.length > 0 && (
-                <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "ai.title")}</div>
-                    <button onClick={() => setGenerated([])}
-                            className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                            title={t(lang, "ai.clear")}>
-                      {t(lang, "ai.clear")}
-                    </button>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-1 md-grid-cols-2 md:grid-cols-2 gap-4">
-                    {generated.map((spec) => (
-                      <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
-                        <div className="text-sm font-medium mb-2">{spec.title}</div>
-                        <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
-                        {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
-                      </div>
-                    ))}
-                  </div>
+            {/* Mensajes */}
+            <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
+              {messages.map((m, i) => (
+                <div key={`${i}-${m.role}`}
+                  className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
+                    m.role === "user"
+                      ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                      : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
+                  }`}>
+                  {m.content}
+                </div>
+              ))}
+              {isTyping && (
+                <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
+                  <span className="animate-bounce">●</span>
+                  <span className="animate-bounce [animation-delay:150ms]">●</span>
+                  <span className="animate-bounce [animation-delay:300ms]">●</span>
                 </div>
               )}
             </div>
-          </main>
-        </div>
-      )}
+          </div>
+        </aside>
+
+        {/* Panel principal (dashboard) */}
+        <main className="overflow-y-auto">
+          <div className="p-4 lg:p-6 space-y-4">
+            {/* KPIs */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <KpiCard label={t(lang, "kpi.salesMonth")} value={kpis ? euro(kpis.ventasMes) : "—"}
+                        delta={kpis ? pct(kpis.deltaVentas) : "—"} positive={(kpis?.deltaVentas ?? 0) >= 0} loading={loading} />
+              <KpiCard label={t(lang, "kpi.newCustomers")} value={kpis?.nuevosMes ?? "—"}
+                        delta={kpis ? pct(kpis.deltaNuevos) : "—"} positive={(kpis?.deltaNuevos ?? 0) >= 0} loading={loading} />
+              <KpiCard label={t(lang, "kpi.avgTicket")} value={kpis ? euro(kpis.ticketMedio) : "—"}
+                        delta={kpis ? pct(kpis.deltaTicket) : "—"} positive={(kpis?.deltaTicket ?? 0) >= 0} loading={loading} />
+            </div>
+
+            {/* Gráfico de barras por defecto */}
+            <ChartCard title={t(lang, "chart.bar.title")}>
+              {loading ? (
+                <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "loading")}</div>
+              ) : err ? (
+                <div className="h-full grid place-items-center text-sm text-rose-600">
+                  {t(lang, "error")}: {typeof err === "string" ? err : String((err as any)?.message ?? err)}
+                </div>
+              ) : !serieBar?.length ? (
+                <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "nodata")}</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={serieBar} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
+                    <XAxis dataKey="mes" stroke="currentColor" />
+                    <YAxis stroke="currentColor" />
+                    <Tooltip contentStyle={tooltipStyle} />
+                    <Legend />
+                    <Bar dataKey="gastos" name={lang === "en" ? "Expenses" : "Gastos"} radius={[6, 6, 0, 0]}
+                          fill={theme === "dark" ? "#22c55e" : "#16a34a"} isAnimationActive animationDuration={800} />
+                    <Bar dataKey="ventas" name={lang === "en" ? "Sales" : "Ventas"} radius={[6, 6, 0, 0]}
+                          fill={theme === "dark" ? "#3b82f6" : "#2563eb"} isAnimationActive animationDuration={800} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </ChartCard>
+
+            {/* Pie por canal */}
+            <ChartCard title={`${t(lang, "pie.title.prefix")}${mesActivo || "—"}`}
+                       footer={lang === "en" ? "Count of operations per channel in the selected month." : "Cuenta de operaciones por canal en el mes seleccionado."}>
+              <ChannelPie key={mesActivo || "none"} data={pieData} loading={loading} error={err} />
+            </ChartCard>
+
+            {/* Insights */}
+            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+              <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                {kpis
+                  ? t(lang, "insights.text", { sales: euro(kpis.ventasMes), delta: pct(kpis.deltaVentas), ticket: euro(kpis.ticketMedio) })
+                  : lang === "en" ? "Load your data to see insights." : "Carga tus datos para ver insights."}
+              </p>
+            </div>
+
+            {/* Gráficos de IA */}
+            {generated.length > 0 && (
+              <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "ai.title")}</div>
+                  <button onClick={() => setGenerated([])}
+                          className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                          title={t(lang, "ai.clear")}>
+                    {t(lang, "ai.clear")}
+                  </button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {generated.map((spec) => (
+                    <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                      <div className="text-sm font-medium mb-2">{spec.title}</div>
+                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
+                      {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+
+      {/* Drawer lateral */}
+      <SettingsDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        lang={lang}
+        setLang={setLang}
+        theme={theme}
+        toggleTheme={toggle}
+      />
     </div>
   );
 }
