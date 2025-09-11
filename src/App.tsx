@@ -1,3 +1,4 @@
+// src/App.tsx
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useSheetData } from "./hooks/useSheetData";
 import {
@@ -11,13 +12,10 @@ import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
 import { parsePromptToSpec } from "./ai/parsePrompt";
-// import { describeSpec } from "./ai/promptHelper"; // ya no lo usamos para forzar idioma
 import type { ChartSpec } from "./types/chart";
 import { t, type Lang } from "./i18n";
 import { useLang } from "./hooks/useLang";
 import SettingsDrawer from "./components/SettingsDrawer";
-
-/* ✅ API base (Render) */
 import { API_BASE } from "./config";
 
 /* ===== Tipos locales ===== */
@@ -52,7 +50,6 @@ async function chatWithAI(
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
-
   const timeout = setTimeout(() => controller.abort(), 25000);
 
   try {
@@ -65,7 +62,7 @@ async function chatWithAI(
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     return {
-      assistant: typeof data.reply === "string" ? data.reply : (data.assistant || (lang === "en" ? "Ok." : "Vale.")),
+      assistant: typeof data.reply === "string" ? data.reply : (lang === "en" ? "Ok." : "Vale."),
       specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
     };
   } catch (e: any) {
@@ -86,7 +83,7 @@ export default function App() {
   const lang = (langHook?.lang as Lang) || ("en" as Lang);
   const setLang = langHook?.setLang || (() => {});
 
-  /* Drawer lateral (ajustes + conexiones) */
+  /* Drawer lateral (ajustes) */
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   /* Chat */
