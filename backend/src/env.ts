@@ -11,6 +11,7 @@ const DEV_BYPASS_AUTH = process.env.DEV_BYPASS_AUTH === "true";
 
 export const ENV = {
   PORT: Number(process.env.PORT || 4000),
+
   DATABASE_URL: req("DATABASE_URL"),
 
   // Solo exigimos la PEM si NO hay bypass
@@ -28,6 +29,9 @@ export const ENV = {
 
   DEV_BYPASS_AUTH,
   DEV_ORG_ID: process.env.DEV_ORG_ID || "",
+
+  // ✅ NUEVO: opcional, para que compile aunque no lo definas
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
 } as const;
 
 export type Env = typeof ENV;
