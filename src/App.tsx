@@ -7,7 +7,6 @@ import {
 } from "recharts";
 import KpiCard from "./components/KpiCard";
 import ChartCard from "./components/ChartCard";
-// import ChannelPie from "./components/ChannelPie"; // 👈 eliminado del layout
 import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
@@ -35,6 +34,7 @@ const isGreeting = (s: string) => /^(hola|buenas|hey|holi|que tal|qué tal|hi|he
 /* ===== Persistencia ===== */
 const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
+const LS_CHAT_OPEN = "mikpi:chatOpen";
 
 /* ===== Cliente a /api/chat con cancelación + timeout ===== */
 async function chatWithAI(
@@ -74,25 +74,6 @@ async function chatWithAI(
   }
 }
 
-/** Título consistente según idioma aunque el backend devuelva otro */
-function titleFor(spec: ChartSpec, lang: Lang) {
-  const m = Number(spec?.params?.months);
-  switch (spec.intent) {
-    case "ventas_vs_gastos_mes":
-      return lang === "en" ? `Sales vs Expenses (last ${m || 8} months)` : `Ventas vs Gastos (últimos ${m || 8} meses)`;
-    case "evolucion_ventas_n_meses":
-      return lang === "en" ? `Sales evolution (last ${m || 6} months)` : `Evolución de ventas (últimos ${m || 6} meses)`;
-    case "ventas_por_canal_mes":
-      return lang === "en" ? "Sales by channel (active month)" : "Ventas por canal (mes activo)";
-    case "top_canales":
-      return lang === "en"
-        ? `Top ${spec?.params?.topN || 5} channels (active month)`
-        : `Top ${spec?.params?.topN || 5} canales (mes activo)`;
-    default:
-      return spec.title || (lang === "en" ? "Chart" : "Gráfico");
-  }
-}
-
 export default function App() {
   /* Tema e idioma */
   const dm = (useDarkMode() as { theme?: "dark" | "light"; toggle?: () => void }) || {};
@@ -104,6 +85,19 @@ export default function App() {
 
   /* Drawer lateral (ajustes) */
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  /* ✅ Sidebar de chat colapsable (persistido) */
+  const [chatOpen, setChatOpen] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(LS_CHAT_OPEN);
+      return raw == null ? true : raw === "true";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(LS_CHAT_OPEN, String(chatOpen)); } catch {}
+  }, [chatOpen]);
 
   /* Chat */
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -221,16 +215,13 @@ export default function App() {
     }
   };
 
-  /* Regenerar y Detener */
+  /* Regenerar / Detener / Limpiar */
   const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
   const onDetener = () => { abortRef.current?.abort(); setIsTyping(false); };
-
-  // Borrar chat
-  function clearChat() {
+  const onClearChat = () => {
     setMessages([{ role: "assistant", content: t(lang, "chat.greeting") }]);
-    setGenerated([]);
-    try { localStorage.removeItem(LS_MESSAGES); localStorage.removeItem(LS_CHARTS); } catch {}
-  }
+    try { localStorage.setItem(LS_MESSAGES, JSON.stringify([{ role: "assistant", content: t(lang, "chat.greeting") }])); } catch {}
+  };
 
   /* Tooltip Recharts */
   const tooltipStyle: React.CSSProperties = {
@@ -321,108 +312,136 @@ export default function App() {
         </div>
       </header>
 
-      {/* Layout principal */}
-      <div className="mx-auto max-w-7xl grid grid-cols-1 lg:grid-cols-[30%_1fr]">
-        {/* Sidebar / Chat */}
-        <aside className="border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h-[calc(100vh-56px)] flex flex-col">
-          <div className="p-4">
-            <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">{t(lang, "chat.title")}</h2>
+      {/* Toggle pestañita para abrir el chat cuando está cerrado (fixed a la izquierda) */}
+      {!chatOpen && (
+        <button
+          onClick={() => setChatOpen(true)}
+          className="fixed left-2 top-1/2 -translate-y-1/2 z-40 rounded-full w-8 h-8 bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow hover:opacity-90"
+          aria-label={lang === "en" ? "Open chat" : "Abrir chat"}
+          title={lang === "en" ? "Open chat" : "Abrir chat"}
+        >
+          &gt;
+        </button>
+      )}
 
-            {/* Input + acciones */}
-            <div className="mt-3 flex gap-2">
-              <textarea
-                className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none resize-y"
-                placeholder={t(lang, "chat.placeholder")}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
-                aria-label={t(lang, "chat.title")}
-              />
-              <button
-                onClick={() => enviar()}
-                disabled={!input.trim() || isTyping}
-                className="rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {t(lang, "send")}
-              </button>
-            </div>
+      {/* Layout principal con grid adaptable */}
+      <div
+        className={`mx-auto max-w-7xl grid grid-cols-1 transition-all duration-300 ${
+          chatOpen ? "lg:grid-cols-[30%_1fr]" : "lg:grid-cols-1"
+        }`}
+      >
+        {/* Sidebar / Chat (se oculta en desktop cuando está cerrado) */}
+        {chatOpen && (
+          <aside className="relative border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 lg:min-h-[calc(100vh-56px)] flex flex-col">
+            {/* Pestañita para cerrar el chat (pegada al borde) */}
+            <button
+              onClick={() => setChatOpen(false)}
+              className="hidden lg:flex absolute top-1/2 -right-3 -translate-y-1/2 z-40 rounded-full w-8 h-8 bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow hover:opacity-90"
+              aria-label={lang === "en" ? "Close chat" : "Cerrar chat"}
+              title={lang === "en" ? "Close chat" : "Cerrar chat"}
+            >
+              &lt;
+            </button>
 
-            {/* Acciones: Regenerar / Detener / Borrar chat */}
-            <div className="mt-2 flex gap-2">
-              <button
-                onClick={onRegenerar}
-                disabled={!lastUserRef.current || isTyping}
-                className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
-                title={lang === "en" ? "Regenerate last request" : "Regenerar última petición"}
-              >
-                🔁 {lang === "en" ? "Regenerate" : "Regenerar"}
-              </button>
-              <button
-                onClick={onDetener}
-                disabled={!isTyping}
-                className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
-                title={lang === "en" ? "Stop response" : "Detener respuesta"}
-              >
-                ⏹ {lang === "en" ? "Stop" : "Detener"}
-              </button>
-              <button
-                onClick={clearChat}
-                className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                title={lang === "en" ? "Clear conversation" : "Borrar conversación"}
-              >
-                🧹 {lang === "en" ? "Clear chat" : "Borrar chat"}
-              </button>
-            </div>
+            <div className="p-4">
+              <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">{t(lang, "chat.title")}</h2>
 
-            {/* Ejemplos — ENVIAN directamente */}
-            <div className="mt-2 flex flex-wrap gap-2">
-              {SUGGESTIONS.map((q) => (
-                <button key={q} onClick={() => enviar(q)}
-                  className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                  {q}
+              {/* Input + acciones */}
+              <div className="mt-3 flex gap-2">
+                <textarea
+                  className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none resize-y"
+                  placeholder={t(lang, "chat.placeholder")}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
+                  aria-label={t(lang, "chat.title")}
+                />
+                <button
+                  onClick={() => enviar()}
+                  disabled={!input.trim() || isTyping}
+                  className="rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {t(lang, "send")}
                 </button>
-              ))}
-            </div>
+              </div>
 
-            {/* Mes */}
-            <div className="mt-4">
-              <label className="text-xs text-zinc-500 dark:text-zinc-400">{t(lang, "month.filter")}</label>
-              <select
-                className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
-                value={mesActivo || ""}
-                onChange={(e) => setMesSel(e.target.value)}
-                disabled={!mesesDisponibles.length}
-              >
-                {mesesDisponibles.length === 0 ? (
-                  <option value="">{t(lang, "loading")}</option>
-                ) : (
-                  mesesDisponibles.map((m) => <option key={m} value={m}>{m}</option>)
+              {/* Acciones: Regenerar / Detener / Limpiar */}
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  onClick={onRegenerar}
+                  disabled={!lastUserRef.current || isTyping}
+                  className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+                  title={lang === "en" ? "Regenerate last request" : "Regenerar última petición"}
+                >
+                  🔁 {lang === "en" ? "Regenerate" : "Regenerar"}
+                </button>
+                <button
+                  onClick={onDetener}
+                  disabled={!isTyping}
+                  className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+                  title={lang === "en" ? "Stop response" : "Detener respuesta"}
+                >
+                  ⏹ {lang === "en" ? "Stop" : "Detener"}
+                </button>
+                <button
+                  onClick={onClearChat}
+                  className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  title={lang === "en" ? "Clear chat" : "Limpiar chat"}
+                >
+                  🗑 {lang === "en" ? "Clear chat" : "Limpiar chat"}
+                </button>
+              </div>
+
+              {/* Ejemplos — ENVIAN directamente */}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {SUGGESTIONS.map((q) => (
+                  <button key={q} onClick={() => enviar(q)}
+                    className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                    {q}
+                  </button>
+                ))}
+              </div>
+
+              {/* Mes */}
+              <div className="mt-4">
+                <label className="text-xs text-zinc-500 dark:text-zinc-400">{t(lang, "month.filter")}</label>
+                <select
+                  className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
+                  value={mesActivo || ""}
+                  onChange={(e) => setMesSel(e.target.value)}
+                  disabled={!mesesDisponibles.length}
+                >
+                  {mesesDisponibles.length === 0 ? (
+                    <option value="">{t(lang, "loading")}</option>
+                  ) : (
+                    mesesDisponibles.map((m) => <option key={m} value={m}>{m}</option>)
+                  )}
+                </select>
+              </div>
+
+              {/* Mensajes */}
+              <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
+                {messages.map((m, i) => (
+                  <div key={`${i}-${m.role}`}
+                    className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
+                      m.role === "user"
+                        ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
+                    }`}>
+                    {m.content}
+                  </div>
+                ))}
+                {isTyping && (
+                  <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
+                    <span className="animate-bounce">●</span>
+                    <span className="animate-bounce [animation-delay:150ms]">●</span>
+                    <span className="animate-bounce [animation-delay:300ms]">●</span>
+                  </div>
                 )}
-              </select>
+              </div>
             </div>
-
-            {/* Mensajes */}
-            <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto max-h-[48vh]">
-              {messages.map((m, i) => (
-                <div key={`${i}-${m.role}`}
-                  className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
-                    m.role === "user"
-                      ? "ml-auto border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
-                      : "mr-auto border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300"
-                  }`}>
-                  {m.content}
-                </div>
-              ))}
-              {isTyping && (
-                <div className="mr-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 text-sm rounded-2xl px-3 py-2 flex gap-1">
-                  <span className="animate-bounce">●</span>
-                  <span className="animate-bounce [animation-delay:150ms]">●</span>
-                  <span className="animate-bounce [animation-delay:300ms]">●</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </aside>
+          </aside>
+        )}
 
         {/* Panel principal (dashboard) */}
         <main className="overflow-y-auto">
@@ -464,19 +483,7 @@ export default function App() {
               )}
             </ChartCard>
 
-            {/* 👇 Eliminado el Pie por canal para dar más protagonismo a los gráficos de IA */}
-
-            {/* Insights */}
-            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-              <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                {kpis
-                  ? t(lang, "insights.text", { sales: euro(kpis.ventasMes), delta: pct(kpis.deltaVentas), ticket: euro(kpis.ticketMedio) })
-                  : lang === "en" ? "Load your data to see insights." : "Carga tus datos para ver insights."}
-              </p>
-            </div>
-
-            {/* Gráficos de IA */}
+            {/* 🔥 Gráficos de IA en posición central (sin pie chart fijo) */}
             {generated.length > 0 && (
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="flex items-center justify-between">
@@ -488,17 +495,27 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className={`mt-3 grid gap-4 ${generated.length > 1 ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
                   {generated.map((spec) => (
-                    <div key={spec.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
-                      <div className="text-sm font-medium mb-2">{titleFor(spec, lang)}</div>
-                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} lang={lang} />
+                    <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                      <div className="text-sm font-medium mb-2">{spec.title}</div>
+                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
                       {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
                     </div>
                   ))}
                 </div>
               </div>
             )}
+
+            {/* Insights */}
+            <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+              <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                {kpis
+                  ? t(lang, "insights.text", { sales: euro(kpis.ventasMes), delta: pct(kpis.deltaVentas), ticket: euro(kpis.ticketMedio) })
+                  : lang === "en" ? "Load your data to see insights." : "Carga tus datos para ver insights."}
+              </p>
+            </div>
           </div>
         </main>
       </div>
