@@ -9,6 +9,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from "recharts";
 import type { ChartSpec } from "../types/chart";
+import type { Lang } from "../i18n";
 
 type VentasRow = {
   fecha?: Date | null;
@@ -35,13 +36,21 @@ export default function DynamicChart({
   ventas,
   serieBar,
   mesActivo,
+  lang,
 }: {
   spec: ChartSpec;
   ventas?: VentasRow[];
   serieBar?: SerieBarPoint[];
   mesActivo: string | null;
+  lang: Lang;
 }) {
   const { type, intent, params } = spec;
+
+  const TXT = {
+    sales: lang === "en" ? "Sales" : "Ventas",
+    expenses: lang === "en" ? "Expenses" : "Gastos",
+    noData: lang === "en" ? "No data." : "Sin datos.",
+  };
 
   const data = useMemo(() => {
     switch (intent) {
@@ -62,7 +71,6 @@ export default function DynamicChart({
       case "ventas_vs_gastos_mes": {
         const months = Math.max(1, Math.min(24, params?.months ?? 8));
         const src = Array.isArray(serieBar) ? serieBar.slice() : [];
-        // ya viene como {mes, ventas, gastos}; preserva orden ascendente (01..12..)
         src.sort((a, b) => monthSort(a.mes, b.mes));
         return lastN(src, months);
       }
@@ -71,7 +79,6 @@ export default function DynamicChart({
         const months = Math.max(1, Math.min(24, params?.months ?? 6));
         const src = Array.isArray(serieBar) ? serieBar.slice() : [];
         src.sort((a, b) => monthSort(a.mes, b.mes));
-        // dejamos sólo ventas
         return lastN(src, months).map((d) => ({ mes: d.mes, ventas: d.ventas }));
       }
 
@@ -99,10 +106,9 @@ export default function DynamicChart({
   }, [intent, params, ventas, mesActivo, serieBar]);
 
   if (!data || data.length === 0) {
-    return <div className="h-56 grid place-items-center text-sm text-zinc-500">Sin datos.</div>;
+    return <div className="h-56 grid place-items-center text-sm text-zinc-500">{TXT.noData}</div>;
   }
 
-  // Render según type
   if (type === "pie") {
     return (
       <div className="h-64">
@@ -122,7 +128,6 @@ export default function DynamicChart({
   }
 
   if (type === "bar") {
-    // Bar puede ser 'vs' (ventas & gastos) o 'top_canales' (value)
     const hasGastos = (data[0] as any).gastos != null;
     return (
       <div className="h-64">
@@ -135,11 +140,11 @@ export default function DynamicChart({
             <Legend />
             {hasGastos ? (
               <>
-                <Bar dataKey="gastos" name="Gastos" fill="#22c55e" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="ventas" name="Ventas" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="gastos" name={TXT.expenses} fill="#22c55e" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="ventas" name={TXT.sales}    fill="#3b82f6" radius={[6, 6, 0, 0]} />
               </>
             ) : (
-              <Bar dataKey="value" name="Ventas" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="value" name={TXT.sales} fill="#3b82f6" radius={[6, 6, 0, 0]} />
             )}
           </BarChart>
         </ResponsiveContainer>
@@ -157,14 +162,13 @@ export default function DynamicChart({
             <YAxis />
             <Tooltip />
             <Legend />
-            <Line dataKey="ventas" name="Ventas" type="monotone" stroke="#3b82f6" strokeWidth={2} dot={false} />
+            <Line dataKey="ventas" name={TXT.sales} type="monotone" stroke="#3b82f6" strokeWidth={2} dot={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
     );
   }
 
-  // area
   return (
     <div className="h-64">
       <ResponsiveContainer width="100%" height="100%">
@@ -174,7 +178,7 @@ export default function DynamicChart({
           <YAxis />
           <Tooltip />
           <Legend />
-          <Area dataKey="ventas" name="Ventas" type="monotone" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25} />
+          <Area dataKey="ventas" name={TXT.sales} type="monotone" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25} />
         </AreaChart>
       </ResponsiveContainer>
     </div>

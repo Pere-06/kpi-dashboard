@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import KpiCard from "./components/KpiCard";
 import ChartCard from "./components/ChartCard";
-import ChannelPie from "./components/ChannelPie";
+// import ChannelPie from "./components/ChannelPie"; // 👈 eliminado del layout
 import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
@@ -71,6 +71,25 @@ async function chatWithAI(
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Título consistente según idioma aunque el backend devuelva otro */
+function titleFor(spec: ChartSpec, lang: Lang) {
+  const m = Number(spec?.params?.months);
+  switch (spec.intent) {
+    case "ventas_vs_gastos_mes":
+      return lang === "en" ? `Sales vs Expenses (last ${m || 8} months)` : `Ventas vs Gastos (últimos ${m || 8} meses)`;
+    case "evolucion_ventas_n_meses":
+      return lang === "en" ? `Sales evolution (last ${m || 6} months)` : `Evolución de ventas (últimos ${m || 6} meses)`;
+    case "ventas_por_canal_mes":
+      return lang === "en" ? "Sales by channel (active month)" : "Ventas por canal (mes activo)";
+    case "top_canales":
+      return lang === "en"
+        ? `Top ${spec?.params?.topN || 5} channels (active month)`
+        : `Top ${spec?.params?.topN || 5} canales (mes activo)`;
+    default:
+      return spec.title || (lang === "en" ? "Chart" : "Gráfico");
   }
 }
 
@@ -148,21 +167,6 @@ export default function App() {
   }, [mesesDisponibles, mesSel]);
   const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
-  /* Pie por canal (mes activo) */
-  const pieData = useMemo<{ name: string; value: number }[]>(() => {
-    if (!mesActivo || !ventas?.length) return [];
-    const map: Record<string, number> = {};
-    ventas.forEach((r) => {
-      if (r?.fecha && ymKey(r.fecha) === mesActivo) {
-        const canal = (r.canal ?? "N/D") as string;
-        const v = Number(r.ventas ?? 0);
-        if (!Number.isFinite(v)) return;
-        map[canal] = (map[canal] || 0) + v;
-      }
-    });
-    return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [ventas, mesActivo]);
-
   /* Enviar */
   const enviar = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
@@ -220,6 +224,13 @@ export default function App() {
   /* Regenerar y Detener */
   const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
   const onDetener = () => { abortRef.current?.abort(); setIsTyping(false); };
+
+  // Borrar chat
+  function clearChat() {
+    setMessages([{ role: "assistant", content: t(lang, "chat.greeting") }]);
+    setGenerated([]);
+    try { localStorage.removeItem(LS_MESSAGES); localStorage.removeItem(LS_CHARTS); } catch {}
+  }
 
   /* Tooltip Recharts */
   const tooltipStyle: React.CSSProperties = {
@@ -336,7 +347,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Acciones: Regenerar / Detener */}
+            {/* Acciones: Regenerar / Detener / Borrar chat */}
             <div className="mt-2 flex gap-2">
               <button
                 onClick={onRegenerar}
@@ -353,6 +364,13 @@ export default function App() {
                 title={lang === "en" ? "Stop response" : "Detener respuesta"}
               >
                 ⏹ {lang === "en" ? "Stop" : "Detener"}
+              </button>
+              <button
+                onClick={clearChat}
+                className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                title={lang === "en" ? "Clear conversation" : "Borrar conversación"}
+              >
+                🧹 {lang === "en" ? "Clear chat" : "Borrar chat"}
               </button>
             </div>
 
@@ -446,11 +464,7 @@ export default function App() {
               )}
             </ChartCard>
 
-            {/* Pie por canal */}
-            <ChartCard title={`${t(lang, "pie.title.prefix")}${mesActivo || "—"}`}
-                       footer={lang === "en" ? "Count of operations per channel in the selected month." : "Cuenta de operaciones por canal en el mes seleccionado."}>
-              <ChannelPie key={mesActivo || "none"} data={pieData} loading={loading} error={err} />
-            </ChartCard>
+            {/* 👇 Eliminado el Pie por canal para dar más protagonismo a los gráficos de IA */}
 
             {/* Insights */}
             <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
@@ -474,11 +488,11 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-6">
                   {generated.map((spec) => (
-                    <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
-                      <div className="text-sm font-medium mb-2">{spec.title}</div>
-                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
+                    <div key={spec.id} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                      <div className="text-sm font-medium mb-2">{titleFor(spec, lang)}</div>
+                      <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} lang={lang} />
                       {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
                     </div>
                   ))}
