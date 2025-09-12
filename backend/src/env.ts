@@ -30,8 +30,9 @@ export const ENV = {
   DEV_BYPASS_AUTH,
   DEV_ORG_ID: process.env.DEV_ORG_ID || "",
 
-  // ✅ NUEVO: opcional, para que compile aunque no lo definas
+  // ✅ OpenAI (seguro para build y runtime)
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  OPENAI_MODEL: process.env.OPENAI_MODEL || "gpt-4o-mini",
 } as const;
 
 export type Env = typeof ENV;
