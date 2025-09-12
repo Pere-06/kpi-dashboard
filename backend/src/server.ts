@@ -1,5 +1,5 @@
 // backend/src/server.ts
-import "undici/register"; // asegura fetch estable en Node 20
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
