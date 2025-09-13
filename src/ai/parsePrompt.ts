@@ -2,19 +2,49 @@
 import type { ChartSpec } from "../types/chart";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
-
 const norm = (s: string) =>
-  (s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "");
+  (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+
+// Meses en ES/EN; devolvemos nombres tal cual para que el backend los mapee a YYYY-MM
+const MONTHS_EN = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+const MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+function extractMonthNames(p: string) {
+  const all = [...MONTHS_EN, ...MONTHS_ES];
+  const found: string[] = [];
+  for (const m of all) {
+    const re = new RegExp(`\\b${m}\\b`, "i");
+    if (re.test(p)) found.push(m);
+  }
+  return Array.from(new Set(found));
+}
 
 export function parsePromptToSpec(raw: string): ChartSpec | null {
   const p = norm(raw);
 
+  // 🎯 Comparativa explícita de 2 meses: "sales vs expenses march vs june" / "ventas vs gastos marzo y junio"
+  const wantsVs =
+    /(ventas.*gastos|gastos.*ventas)/.test(p) ||
+    /(sales.*expenses|expenses.*sales)/.test(p);
+  const monthsMentioned = extractMonthNames(p);
+  if (wantsVs && monthsMentioned.length >= 2) {
+    const [m1, m2] = monthsMentioned.slice(0, 2);
+    return {
+      id: uid(),
+      type: "bar",
+      title: /sales/i.test(raw)
+        ? `Sales vs Expenses (${m1} vs ${m2})`
+        : `Ventas vs Gastos (${m1} vs ${m2})`,
+      intent: "ventas_vs_gastos_dos_meses",
+      // 👇 dejamos nombres; el backend los convertirá a YYYY-MM según mesesDisponibles
+      params: { monthNames: [m1, m2] },
+      notes: /sales/i.test(raw)
+        ? "Direct comparison between two months."
+        : "Comparativa directa entre dos meses.",
+    };
+  }
+
   // ======= Ventas por canal / Sales by channel (mes activo) → pie
-  // ES: ventas|ingresos + canal
-  // EN: sales + channel
   if (
     (/(\bventas\b|\bingresos\b).*(\bcanal(es)?\b)/.test(p)) ||
     (/(\bsales\b).*(\bchannel(s)?\b)/.test(p))
@@ -28,9 +58,7 @@ export function parsePromptToSpec(raw: string): ChartSpec | null {
     };
   }
 
-  // ======= Ventas vs gastos / Sales vs expenses últimos N meses → bar
-  // ES: ventas.*gastos  | gastos.*ventas
-  // EN: sales.*expenses | expenses.*sales
+  // ======= Ventas vs gastos últimos N meses → bar
   if (
     /(ventas.*gastos|gastos.*ventas)/.test(p) ||
     /(sales.*expenses|expenses.*sales)/.test(p)
@@ -48,9 +76,7 @@ export function parsePromptToSpec(raw: string): ChartSpec | null {
     };
   }
 
-  // ======= Evolución de ventas / Sales evolution últimos N meses → line
-  // ES: evolucion|tendencia|historico|últimos N meses
-  // EN: evolution|trend|history|last N months
+  // ======= Evolución de ventas últimos N meses → line
   if (
     /(evolucion|tendencia|historico)/.test(p) ||
     /(evolution|trend|history)/.test(p) ||

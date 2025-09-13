@@ -100,6 +100,22 @@ export default function DynamicChart({
           .map(([name, value]) => ({ name, value }));
         return sorted;
       }
+
+      // 👇 NUEVO: comparativa exacta de 2 meses
+      case "ventas_vs_gastos_dos_meses": {
+        // Esperamos params.months = ["YYYY-MM","YYYY-MM"]
+        const pair = Array.isArray(params?.months) ? params.months.slice(0, 2) : [];
+        if (!Array.isArray(serieBar) || serieBar.length === 0 || pair.length < 2) return [];
+        const [m1, m2] = pair;
+        const pick = (m?: string) => serieBar.find((d) => d.mes === m);
+        const d1 = pick(m1);
+        const d2 = pick(m2);
+        const rows: Array<{ name: string; ventas: number; gastos: number }> = [];
+        if (d1) rows.push({ name: m1, ventas: d1.ventas, gastos: d1.gastos });
+        if (d2) rows.push({ name: m2, ventas: d2.ventas, gastos: d2.gastos });
+        return rows;
+      }
+
       default:
         return [];
     }
@@ -129,12 +145,16 @@ export default function DynamicChart({
 
   if (type === "bar") {
     const hasGastos = (data[0] as any).gastos != null;
+    // Si son 2 meses, nuestros objetos tienen "name" (YYYY-MM) como eje X
+    const isTwoMonths = intent === "ventas_vs_gastos_dos_meses";
+    const xKey = hasGastos ? (isTwoMonths ? "name" : "mes") : "name";
+
     return (
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data as any}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey={hasGastos ? "mes" : "name"} />
+            <XAxis dataKey={xKey} />
             <YAxis />
             <Tooltip />
             <Legend />

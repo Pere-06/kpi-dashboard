@@ -1,8 +1,7 @@
+// backend/src/routes/chat.ts
 import type { FastifyPluginAsync } from "fastify";
-
 import { ENV } from "../env.js";
 
-/** Tipos alineados con tu frontend */
 type ChartType = "line" | "bar" | "area" | "pie";
 type ChartSpec = {
   id: string;
@@ -12,7 +11,8 @@ type ChartSpec = {
     | "ventas_por_canal_mes"
     | "ventas_vs_gastos_mes"
     | "evolucion_ventas_n_meses"
-    | "top_canales";
+    | "top_canales"
+    | "ventas_vs_gastos_dos_meses";
   params?: Record<string, any>;
   notes?: string;
 };
@@ -23,74 +23,107 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const norm = (s: string) =>
   (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 
-/** Parser básico (espejo del front) */
+/** ===== Parser básico (igual que en el front) ===== */
 function inferSpecsFromText(text: string): ChartSpec[] {
   const p = norm(text);
 
-  if (/(ventas|ingresos).*(canal)/.test(p)) {
-    return [
-      {
-        id: uid(),
-        type: "pie",
-        title: "Ventas por canal (mes activo)",
-        intent: "ventas_por_canal_mes",
-        params: {},
-      },
-    ];
+  if (/(ventas|ingresos).*(canal)/.test(p) || /(sales).*(channel)/.test(p)) {
+    return [{ id: uid(), type: "pie", title: "Ventas por canal (mes activo)", intent: "ventas_por_canal_mes", params: {} }];
   }
 
-  if (/ventas.*gastos|gastos.*ventas/.test(p)) {
-    const m = p.match(/(\d+)\s*(mes|meses)/);
+  if (/ventas.*gastos|gastos.*ventas|sales.*expenses|expenses.*sales/.test(p)) {
+    const m = p.match(/(\d+)\s*(mes|meses|month|months)/);
     const months = m ? Math.max(1, Math.min(24, Number(m[1]))) : 8;
-    return [
-      {
-        id: uid(),
-        type: "bar",
-        title: `Ventas vs Gastos (últimos ${months} meses)`,
-        intent: "ventas_vs_gastos_mes",
-        params: { months },
-      },
-    ];
+    return [{ id: uid(), type: "bar", title: `Ventas vs Gastos (últimos ${months} meses)`, intent: "ventas_vs_gastos_mes", params: { months } }];
   }
 
-  if (/evolucion|tendencia|historico/.test(p) || /ultimos?\s+\d+\s+mes/.test(p)) {
-    const m = p.match(/(\d+)\s*(mes|meses)/);
+  if (/evolucion|tendencia|historico|evolution|trend|history/.test(p) || /ultimos?\s+\d+\s+mes|last\s+\d+\s+month/.test(p)) {
+    const m = p.match(/(\d+)\s*(mes|meses|month|months)/);
     const months = m ? Math.max(1, Math.min(36, Number(m[1]))) : 6;
-    return [
-      {
-        id: uid(),
-        type: "line",
-        title: `Evolución de ventas (últimos ${months} meses)`,
-        intent: "evolucion_ventas_n_meses",
-        params: { months },
-      },
-    ];
+    return [{ id: uid(), type: "line", title: `Evolución de ventas (últimos ${months} meses)`, intent: "evolucion_ventas_n_meses", params: { months } }];
   }
 
-  if (/top\s*\d+.*canales?/.test(p)) {
+  if (/top\s*\d+.*(canales?|channels?)/.test(p)) {
     const m = p.match(/top\s*(\d+)/);
     const topN = m ? Math.max(1, Math.min(20, Number(m[1]))) : 5;
-    return [
-      {
-        id: uid(),
-        type: "bar",
-        title: `Top ${topN} canales (mes activo)`,
-        intent: "top_canales",
-        params: { topN },
-        notes: "Ordenado por ventas descendentes.",
-      },
-    ];
+    return [{ id: uid(), type: "bar", title: `Top ${topN} canales (mes activo)`, intent: "top_canales", params: { topN }, notes: "Ordenado por ventas descendentes." }];
   }
 
   return [];
+}
+
+/** ===== Utilidades de meses ES/EN -> número (1..12) ===== */
+const MONTHS_EN = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+const MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+function monthNameToIndex(s: string): number | null {
+  const p = norm(s);
+  const idxEn = MONTHS_EN.indexOf(p);
+  if (idxEn >= 0) return idxEn + 1;
+  const idxEs = MONTHS_ES.indexOf(p);
+  if (idxEs >= 0) return idxEs + 1;
+  return null;
+}
+
+/** Dado un número de mes (1..12), escoge el YYYY-MM más reciente de mesesDisponibles que tenga ese mes */
+function pickLatestForMonth(mesesDisponibles: string[], monthNum: number): string | null {
+  const filtered = mesesDisponibles.filter((ym) => {
+    const [, mm] = ym.split("-");
+    return Number(mm) === monthNum;
+  });
+  if (!filtered.length) return null;
+  // más reciente (lexicográfico por YYYY-MM vale)
+  return filtered.sort().at(-1) || null;
+}
+
+/** Detecta “marzo vs junio” o “march vs june” en el texto y lo mapea a dos YYYY-MM */
+function tryTwoMonthComparison(text: string, mesesDisponibles: string[], lang: "es" | "en"): ChartSpec[] {
+  const p = norm(text);
+  const wantsVs =
+    /(ventas.*gastos|gastos.*ventas)/.test(p) ||
+    /(sales.*expenses|expenses.*sales)/.test(p);
+
+  if (!wantsVs) return [];
+
+  // extraer nombres de meses
+  const names: string[] = [];
+  for (const name of [...MONTHS_EN, ...MONTHS_ES]) {
+    const re = new RegExp(`\\b${name}\\b`, "i");
+    if (re.test(text)) names.push(name);
+  }
+
+  if (names.length < 2) return [];
+
+  // Nos quedamos con los 2 primeros distintos
+  const [m1Name, m2Name] = Array.from(new Set(names)).slice(0, 2);
+  const m1 = monthNameToIndex(m1Name);
+  const m2 = monthNameToIndex(m2Name);
+  if (!m1 || !m2) return [];
+
+  const ym1 = pickLatestForMonth(mesesDisponibles, m1);
+  const ym2 = pickLatestForMonth(mesesDisponibles, m2);
+  if (!ym1 || !ym2) return [];
+
+  const title = lang === "en"
+    ? `Sales vs Expenses (${ym1} vs ${ym2})`
+    : `Ventas vs Gastos (${ym1} vs ${ym2})`;
+
+  return [{
+    id: uid(),
+    type: "bar",
+    title,
+    intent: "ventas_vs_gastos_dos_meses",
+    params: { months: [ym1, ym2] },
+    notes: lang === "en" ? "Direct comparison between two months." : "Comparativa directa entre dos meses.",
+  }];
 }
 
 /** Prompt del asistente (tono humano + idioma) */
 function systemPrompt(lang: "es" | "en", mesActivo: string | null) {
   const base =
     lang === "en"
-      ? `You are MiKPI's analytics copilot. Be concise, friendly, and helpful. Always answer in **English**. When the user asks for charts, you may return a short explanation plus chart intents. Current active month: ${mesActivo ?? "N/A"}.`
-      : `Eres el copiloto de analítica de MiKPI. Sé cercano, claro y útil. Responde SIEMPRE en **español**. Si el usuario pide gráficos, puedes devolver una breve explicación y sugerir intents. Mes activo actual: ${mesActivo ?? "N/D"}.`;
+      ? `You are MiKPI's analytics copilot. Be concise, friendly, and helpful. Always answer in English. When the user asks for charts, you may return a short explanation plus chart intents. Current active month: ${mesActivo ?? "N/A"}.`
+      : `Eres el copiloto de analítica de MiKPI. Sé cercano, claro y útil. Responde SIEMPRE en español. Si el usuario pide gráficos, puedes devolver una breve explicación y sugerir intents. Mes activo actual: ${mesActivo ?? "N/D"}.`;
   const style =
     lang === "en"
       ? `Tone: practical, warm, one or two short sentences unless the user asks for detail.`
@@ -98,7 +131,7 @@ function systemPrompt(lang: "es" | "en", mesActivo: string | null) {
   return `${base}\n${style}`;
 }
 
-/** Llamada a OpenAI */
+/** Llamada a OpenAI (opcional, para tono humano) */
 async function askOpenAI({
   messages,
   lang,
@@ -125,7 +158,7 @@ async function askOpenAI({
       },
       body: JSON.stringify({
         model: ENV.OPENAI_MODEL || "gpt-4o-mini",
-        temperature: 0.6,
+        temperature: 0.5,
         max_tokens: 280,
         messages: [
           { role: "system", content: systemPrompt(lang, mesActivo) },
@@ -136,8 +169,7 @@ async function askOpenAI({
 
     if (!r.ok) {
       const errText = await r.text().catch(() => "");
-      const msg = `openai_http_${r.status}`;
-      throw new Error(`${msg}:${errText}`);
+      throw new Error(`openai_http_${r.status}:${errText}`);
     }
     const data = await r.json();
     return data?.choices?.[0]?.message?.content?.trim() || "";
@@ -160,18 +192,18 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const lang: "es" | "en" = body.lang === "en" ? "en" : "es";
     const mesActivo: string | null = body.mesActivo ?? null;
-    const mesesDisponibles = Array.isArray(body.mesesDisponibles)
-      ? body.mesesDisponibles
-      : [];
+    const mesesDisponibles = Array.isArray(body.mesesDisponibles) ? body.mesesDisponibles : [];
     const maxCharts = Math.max(1, Math.min(4, Number(body.maxCharts) || 4));
 
-    const lastUser =
-      [...messages].reverse().find((m) => m?.role === "user")?.content || "";
+    const lastUser = [...messages].reverse().find((m) => m?.role === "user")?.content || "";
 
-    // 1) Intentar inferir specs por patrones
-    const specs = inferSpecsFromText(lastUser);
+    // 1) Intent específico: dos meses con nombres → mapea a YYYY-MM si es posible
+    let specs: ChartSpec[] = tryTwoMonthComparison(lastUser, mesesDisponibles, lang);
 
-    // 2) Intentar respuesta LLM “humana”
+    // 2) Si no, probar parser básico
+    if (!specs.length) specs = inferSpecsFromText(lastUser);
+
+    // 3) Asistente LLM “humano”
     let assistant = "";
     let usedLLM = false;
     let reason = "ok";
@@ -182,21 +214,25 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
     } catch (e: any) {
       usedLLM = false;
       reason = e?.message || "openai_fetch_error";
-      // Si falla, devolvemos una respuesta cortita local
       assistant =
         lang === "en"
           ? "I prepared something based on your request."
           : "He preparado algo según tu petición.";
     }
 
-    // 3) Si no hubo specs, pero el usuario pidió algo de gráfico, ofrece sugerencias
-    if (!specs.length) {
-      const helper =
-        lang === "en"
-          ? `I can create charts like: “sales by channel”, “sales vs expenses last 8 months”, “sales evolution last 6 months”, “top 3 channels”.`
-          : `Puedo crear gráficos como: «ventas por canal», «ventas vs gastos últimos 8 meses», «evolución de ventas últimos 6 meses», «top 3 canales».`;
+    // 4) Si no pudimos generar specs y el usuario mencionó meses → pedir aclaración
+    if (!specs.length && /january|february|march|april|may|june|july|august|september|october|november|december|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre/i.test(lastUser)) {
+      const q = lang === "en"
+        ? "Which exact months should I compare? For example: 2025-03 vs 2025-06."
+        : "¿Qué meses exactos debo comparar? Por ejemplo: 2025-03 vs 2025-06.";
+      assistant = `${assistant}\n\n${q}`;
+    }
 
-      // Si assistant quedó muy corto, añade helper
+    // 5) Si aún sin specs, añade ayuda estándar
+    if (!specs.length) {
+      const helper = lang === "en"
+        ? `I can create charts like: “sales by channel”, “sales vs expenses last 8 months”, “sales evolution last 6 months”, “top 3 channels”.`
+        : `Puedo crear gráficos como: «ventas por canal», «ventas vs gastos últimos 8 meses», «evolución de ventas últimos 6 meses», «top 3 canales».`;
       if (!assistant || assistant.length < 8) assistant = helper;
       else assistant += `\n\n${helper}`;
     }
@@ -206,10 +242,7 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       specs: specs.slice(0, maxCharts),
       usedLLM,
       reason,
-      debug: {
-        mesActivo,
-        mesesDisponibles,
-      },
+      debug: { mesActivo, mesesDisponibles },
     });
   });
 };

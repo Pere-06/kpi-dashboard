@@ -14,6 +14,7 @@ export type ChartSpec = {
     | "ventas_por_canal_mes"
     | "ventas_vs_gastos_mes"
     | "evolucion_ventas_n_meses"
-    | "top_canales";
+    | "top_canales"
+    | "ventas_vs_gastos_dos_meses";
   params?: Record<string, any>;
 };
