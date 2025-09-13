@@ -511,7 +511,8 @@ export default function App() {
                     {generated.map((spec) => (
                       <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
                         <div className="text-sm font-medium mb-2">{spec.title}</div>
-                        <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} />
+                        <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} lang={lang} />
+
                         {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
                       </div>
                     ))}
