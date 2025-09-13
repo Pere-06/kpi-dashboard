@@ -5,46 +5,97 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const norm = (s: string) =>
   (s || "").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 
-// Meses en ES/EN; devolvemos nombres tal cual para que el backend los mapee a YYYY-MM
-const MONTHS_EN = ["january","february","march","april","may","june","july","august","september","october","november","december"];
-const MONTHS_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const MONTHS = {
+  es: [
+    ["enero", "ene", "01"],
+    ["febrero", "feb", "02"],
+    ["marzo", "mar", "03"],
+    ["abril", "abr", "04"],
+    ["mayo", "may", "05"],
+    ["junio", "jun", "06"],
+    ["julio", "jul", "07"],
+    ["agosto", "ago", "08"],
+    ["septiembre", "sep", "09"],
+    ["octubre", "oct", "10"],
+    ["noviembre", "nov", "11"],
+    ["diciembre", "dic", "12"],
+  ],
+  en: [
+    ["january", "jan", "01"],
+    ["february", "feb", "02"],
+    ["march", "mar", "03"],
+    ["april", "apr", "04"],
+    ["may", "may", "05"],
+    ["june", "jun", "06"],
+    ["july", "jul", "07"],
+    ["august", "aug", "08"],
+    ["september", "sep", "09"],
+    ["october", "oct", "10"],
+    ["november", "nov", "11"],
+    ["december", "dec", "12"],
+  ],
+} as const;
 
-function extractMonthNames(p: string) {
-  const all = [...MONTHS_EN, ...MONTHS_ES];
-  const found: string[] = [];
-  for (const m of all) {
-    const re = new RegExp(`\\b${m}\\b`, "i");
-    if (re.test(p)) found.push(m);
-  }
-  return Array.from(new Set(found));
+function monthNameByLang(mm: string, lang: "es" | "en") {
+  const arr = MONTHS[lang];
+  const found = arr.find((row) => row[2] === mm);
+  if (!found) return mm;
+  // capitaliza
+  const name = found[0];
+  return lang === "es"
+    ? name.charAt(0).toUpperCase() + name.slice(1)
+    : name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-export function parsePromptToSpec(raw: string): ChartSpec | null {
+function extractTwoMonths(p: string, lang: "es" | "en"): string[] {
+  // nombres (es/en)
+  const matches: string[] = [];
+  for (const row of MONTHS.es) {
+    const [full, short, mm] = row;
+    if (p.includes(full) || p.includes(short)) matches.push(mm);
+  }
+  for (const row of MONTHS.en) {
+    const [full, short, mm] = row;
+    if (p.includes(full) || p.includes(short)) matches.push(mm);
+  }
+  // numéricos “03 vs 06”
+  const num = p.match(/(?:^|\D)(0?[1-9]|1[0-2])\s*(?:vs|y|and|contra)\s*(0?[1-9]|1[0-2])(?:\D|$)/);
+  if (num) {
+    matches.push(num[1].padStart(2, "0"), num[2].padStart(2, "0"));
+  }
+  // dedup y limita a dos
+  const uniq = Array.from(new Set(matches)).slice(0, 2);
+  return uniq;
+}
+
+export function parsePromptToSpec(raw: string, lang: "es" | "en" = "es"): ChartSpec | null {
   const p = norm(raw);
 
-  // 🎯 Comparativa explícita de 2 meses: "sales vs expenses march vs june" / "ventas vs gastos marzo y junio"
-  const wantsVs =
-    /(ventas.*gastos|gastos.*ventas)/.test(p) ||
-    /(sales.*expenses|expenses.*sales)/.test(p);
-  const monthsMentioned = extractMonthNames(p);
-  if (wantsVs && monthsMentioned.length >= 2) {
-    const [m1, m2] = monthsMentioned.slice(0, 2);
+  // ===== Dos meses (marzo vs junio)
+  const wantsCompareTwo =
+    /(vs|versus|compare|comparar|solo|only)/.test(p) &&
+    /(sales|expenses|ventas|gastos)/.test(p);
+  const pair = extractTwoMonths(p, lang);
+  if (wantsCompareTwo && pair.length === 2) {
+    const [m1, m2] = pair;
+    const t =
+      lang === "en"
+        ? `Sales vs Expenses (${monthNameByLang(m1, "en")} vs ${monthNameByLang(m2, "en")})`
+        : `Ventas vs Gastos (${monthNameByLang(m1, "es")} vs ${monthNameByLang(m2, "es")})`;
     return {
       id: uid(),
       type: "bar",
-      title: /sales/i.test(raw)
-        ? `Sales vs Expenses (${m1} vs ${m2})`
-        : `Ventas vs Gastos (${m1} vs ${m2})`,
+      title: t,
       intent: "ventas_vs_gastos_dos_meses",
-      // 👇 dejamos nombres; el backend los convertirá a YYYY-MM según mesesDisponibles
-      params: { monthNames: [m1, m2] },
-      notes: /sales/i.test(raw)
-        ? "Direct comparison between two months."
-        : "Comparativa directa entre dos meses.",
+      params: { months: [m1, m2] }, // MM, MM
+      notes:
+        lang === "en"
+          ? "Direct comparison between two months."
+          : "Comparación directa entre dos meses.",
     };
   }
 
-  // ======= Ventas por canal / Sales by channel (mes activo) → pie
+  // ===== Ventas por canal (mes activo)
   if (
     (/(\bventas\b|\bingresos\b).*(\bcanal(es)?\b)/.test(p)) ||
     (/(\bsales\b).*(\bchannel(s)?\b)/.test(p))
@@ -52,31 +103,29 @@ export function parsePromptToSpec(raw: string): ChartSpec | null {
     return {
       id: uid(),
       type: "pie",
-      title: /sales/i.test(raw) ? "Sales by channel (active month)" : "Ventas por canal (mes activo)",
+      title: lang === "en" ? "Sales by channel (active month)" : "Ventas por canal (mes activo)",
       intent: "ventas_por_canal_mes",
       params: {},
     };
   }
 
-  // ======= Ventas vs gastos últimos N meses → bar
-  if (
-    /(ventas.*gastos|gastos.*ventas)/.test(p) ||
-    /(sales.*expenses|expenses.*sales)/.test(p)
-  ) {
+  // ===== Ventas vs gastos últimos N meses
+  if (/(ventas.*gastos|gastos.*ventas)/.test(p) || /(sales.*expenses|expenses.*sales)/.test(p)) {
     const m = p.match(/(\d+)\s*(mes|meses|month|months)/);
     const months = m ? Math.max(1, Math.min(24, Number(m[1]))) : 8;
     return {
       id: uid(),
       type: "bar",
-      title: /sales/i.test(raw)
-        ? `Sales vs Expenses (last ${months} months)`
-        : `Ventas vs Gastos (últimos ${months} meses)`,
+      title:
+        lang === "en"
+          ? `Sales vs Expenses (last ${months} months)`
+          : `Ventas vs Gastos (últimos ${months} meses)`,
       intent: "ventas_vs_gastos_mes",
       params: { months },
     };
   }
 
-  // ======= Evolución de ventas últimos N meses → line
+  // ===== Evolución ventas últimos N meses
   if (
     /(evolucion|tendencia|historico)/.test(p) ||
     /(evolution|trend|history)/.test(p) ||
@@ -88,29 +137,30 @@ export function parsePromptToSpec(raw: string): ChartSpec | null {
     return {
       id: uid(),
       type: "line",
-      title: /sales/i.test(raw)
-        ? `Sales evolution (last ${months} months)`
-        : `Evolución de ventas (últimos ${months} meses)`,
+      title:
+        lang === "en"
+          ? `Sales evolution (last ${months} months)`
+          : `Evolución de ventas (últimos ${months} meses)`,
       intent: "evolucion_ventas_n_meses",
       params: { months },
     };
   }
 
-  // ======= Top N canales / Top N channels → bar
+  // ===== Top N canales
   if (/top\s*\d+.*(canales?|channels?)/.test(p)) {
     const m = p.match(/top\s*(\d+)/);
     const topN = m ? Math.max(1, Math.min(20, Number(m[1]))) : 5;
     return {
       id: uid(),
       type: "bar",
-      title: /channel/i.test(raw)
-        ? `Top ${topN} channels (active month)`
-        : `Top ${topN} canales (mes activo)`,
+      title:
+        lang === "en"
+          ? `Top ${topN} channels (active month)`
+          : `Top ${topN} canales (mes activo)`,
       intent: "top_canales",
       params: { topN },
-      notes: /channel/i.test(raw)
-        ? "Sorted by sales descending."
-        : "Ordenado por ventas descendentes.",
+      notes:
+        lang === "en" ? "Sorted by sales descending." : "Ordenado por ventas descendentes.",
     };
   }
 

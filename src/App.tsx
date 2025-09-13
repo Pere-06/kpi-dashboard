@@ -7,7 +7,6 @@ import {
 } from "recharts";
 import KpiCard from "./components/KpiCard";
 import ChartCard from "./components/ChartCard";
-// (Quitamos ChannelPie porque pediste eliminar el piechart)
 import { useDarkMode } from "./hooks/useDarkMode";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
@@ -37,7 +36,7 @@ const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
 const LS_SIDEBAR = "mikpi:sidebar-collapsed";
 
-/* ===== Cliente a /api/chat con cancelación + timeout ===== */
+/* ===== API chat ===== */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
@@ -47,7 +46,6 @@ async function chatWithAI(
   signal?: AbortSignal
 ): Promise<{ assistant: string; specs: ChartSpec[] } | null> {
   const endpoint = `${API_BASE ? API_BASE : ""}/api/chat`;
-
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -66,12 +64,47 @@ async function chatWithAI(
       assistant: typeof data.reply === "string" ? data.reply : (lang === "en" ? "Ok." : "Vale."),
       specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
     };
-  } catch (e: any) {
-    if (e?.name === "AbortError") return null;
+  } catch {
     return null;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+/* ===== Localización de títulos (para specs que vengan del backend o del parser) ===== */
+const MONTH_LABELS = {
+  es: { "01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo","06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre","10":"Octubre","11":"Noviembre","12":"Diciembre" },
+  en: { "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June","07":"July","08":"August","09":"September","10":"October","11":"November","12":"December" },
+};
+function localizeTitle(spec: ChartSpec, lang: "es" | "en"): string {
+  const p = spec.params || {};
+  switch (spec.intent) {
+    case "ventas_vs_gastos_mes":
+      return lang === "en"
+        ? `Sales vs Expenses (last ${p.months ?? 8} months)`
+        : `Ventas vs Gastos (últimos ${p.months ?? 8} meses)`;
+    case "evolucion_ventas_n_meses":
+      return lang === "en"
+        ? `Sales evolution (last ${p.months ?? 6} months)`
+        : `Evolución de ventas (últimos ${p.months ?? 6} meses)`;
+    case "ventas_por_canal_mes":
+      return lang === "en" ? "Sales by channel (active month)" : "Ventas por canal (mes activo)";
+    case "top_canales":
+      return lang === "en"
+        ? `Top ${p.topN ?? 5} channels (active month)`
+        : `Top ${p.topN ?? 5} canales (mes activo)`;
+    case "ventas_vs_gastos_dos_meses": {
+      const [a, b] = Array.isArray(p.months) ? p.months : [];
+      const L = MONTH_LABELS[lang];
+      const A = L?.[String(a).padStart(2, "0")] ?? a ?? "?";
+      const B = L?.[String(b).padStart(2, "0")] ?? b ?? "?";
+      return lang === "en"
+        ? `Sales vs Expenses (${A} vs ${B})`
+        : `Ventas vs Gastos (${A} vs ${B})`;
+    }
+    default:
+      return spec.title;
   }
 }
 
@@ -84,7 +117,7 @@ export default function App() {
   const lang = (langHook?.lang as Lang) || ("en" as Lang);
   const setLang = langHook?.setLang || (() => {});
 
-  /* Drawer de ajustes & sidebar colapsable */
+  /* Drawer & sidebar colapsable */
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(LS_SIDEBAR) === "1"; } catch { return false; }
@@ -136,7 +169,7 @@ export default function App() {
   const { ventas, clientes, serieBar, kpis, loading, err } =
     (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
 
-  /* Meses */
+  /* Meses disponibles / mes activo */
   const mesesDisponibles = useMemo<string[]>(() => {
     const set = new Set<string>();
     ventas?.forEach((v) => v?.fecha && set.add(ymKey(v.fecha)));
@@ -168,7 +201,6 @@ export default function App() {
       return;
     }
 
-    // Cancelar petición previa, si la hubiera
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
@@ -181,8 +213,7 @@ export default function App() {
       if (ai.specs?.length) {
         setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8));
       } else {
-        // Fallback local si no hubo specs
-        const localSpec = parsePromptToSpec(text);
+        const localSpec = parsePromptToSpec(text); // parser local
         if (localSpec) {
           setGenerated((prev) => [localSpec, ...prev].slice(0, 8));
           setMessages((p) => [
@@ -194,7 +225,7 @@ export default function App() {
       return;
     }
 
-    // IA falló o cancelado → fallback
+    // Fallback total
     const localSpec = parsePromptToSpec(text);
     if (localSpec) {
       setGenerated((prev) => [localSpec, ...prev].slice(0, 8));
@@ -207,7 +238,7 @@ export default function App() {
     }
   };
 
-  /* Regenerar / Detener / Limpiar */
+  /* Acciones chat */
   const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
   const onDetener = () => { abortRef.current?.abort(); setIsTyping(false); };
   const onClearChat = () => {
@@ -224,7 +255,7 @@ export default function App() {
     fontSize: "0.875rem",
   };
 
-  /* Sugerencias */
+  /* Sugerencias quick */
   const SUGGESTIONS = [
     t(lang, "chat.example.1"),
     t(lang, "chat.example.2"),
@@ -302,7 +333,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Layout principal (flex + sidebar colapsable) */}
+      {/* Layout principal */}
       <div className="mx-auto max-w-7xl">
         <div className="flex">
           {/* Sidebar / Chat */}
@@ -312,11 +343,7 @@ export default function App() {
               bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800
               shadow-sm dark:shadow-none
             `}
-            style={{
-              width: collapsed ? 56 : 360,
-              minHeight: "calc(100vh - 56px)",
-              willChange: "width",
-            }}
+            style={{ width: collapsed ? 56 : 360, minHeight: "calc(100vh - 56px)", willChange: "width" }}
           >
             {collapsed ? (
               <div className="h-full flex flex-col items-center justify-start pt-4 gap-3">
@@ -435,7 +462,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Handle/pestañita */}
+            {/* Pestañita */}
             <button
               onClick={() => setCollapsed((v) => !v)}
               className="absolute top-1/2 -right-3 -translate-y-1/2 h-10 w-10 grid place-items-center rounded-full border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm hover:scale-105 transition"
@@ -458,7 +485,7 @@ export default function App() {
                          delta={kpis ? pct(kpis.deltaTicket) : "—"} positive={(kpis?.deltaTicket ?? 0) >= 0} loading={loading} />
               </div>
 
-              {/* Gráfico de barras por defecto */}
+              {/* Gráfico por defecto */}
               <ChartCard title={t(lang, "chart.bar.title")}>
                 {loading ? (
                   <div className="h-full grid place-items-center text-sm text-zinc-500">{t(lang, "loading")}</div>
@@ -485,7 +512,7 @@ export default function App() {
                 )}
               </ChartCard>
 
-              {/* Interpretation */}
+              {/* Insights */}
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
                 <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
@@ -495,7 +522,7 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Gráficos de IA */}
+              {/* Gráficos IA */}
               {generated.length > 0 && (
                 <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                   <div className="flex items-center justify-between">
@@ -510,9 +537,8 @@ export default function App() {
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
                     {generated.map((spec) => (
                       <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
-                        <div className="text-sm font-medium mb-2">{spec.title}</div>
+                        <div className="text-sm font-medium mb-2">{localizeTitle(spec, lang)}</div>
                         <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} lang={lang} />
-
                         {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
                       </div>
                     ))}
@@ -524,7 +550,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Drawer lateral (ajustes) */}
+      {/* Drawer lateral */}
       <SettingsDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
