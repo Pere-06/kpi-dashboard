@@ -1,7 +1,7 @@
 // backend/src/routes/ask.ts
 import type { FastifyPluginAsync } from "fastify";
 import { ENV } from "../env.js";
-import { guardSQL, forceLimit, isSelectOnly } from "../sqlGuard";
+import { guardSQL, forceLimit, isSelectOnly } from "../sqlGuard.js";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
