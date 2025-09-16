@@ -17,6 +17,10 @@ import { useLang } from "./hooks/useLang";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { API_BASE } from "./config";
 
+// 🔹 NUEVO: Ask (SQL/NQL)
+import { askLLM, type AskResponse } from "./ai/askClient";
+import GenericResultChart from "./components/GenericResultChart";
+
 /* ===== Tipos locales ===== */
 type VentasRow = { fecha?: Date | null; canal?: string | null; ventas?: number | null; gastos?: number | null; mes?: string | null; };
 type ClientesRow = { fecha?: Date | null };
@@ -36,11 +40,12 @@ const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
 const LS_SIDEBAR = "mikpi:sidebar-collapsed";
 
-/* ===== API chat ===== */
+/* ===== API chat (helper local) ===== */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
-  mesesDisponibles: string[],
+  ventasMonths: string[],
+  clientesMonths: string[],
   lang: Lang,
   maxCharts: number,
   signal?: AbortSignal
@@ -56,7 +61,14 @@ async function chatWithAI(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
-      body: JSON.stringify({ messages: history, mesActivo, mesesDisponibles, lang, maxCharts }),
+      body: JSON.stringify({
+        messages: history,
+        mesActivo,
+        ventasMonths,
+        clientesMonths,
+        lang,
+        maxCharts,
+      }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
@@ -72,11 +84,16 @@ async function chatWithAI(
   }
 }
 
-/* ===== Localización de títulos (para specs que vengan del backend o del parser) ===== */
+/* ===== Localización de títulos ===== */
 const MONTH_LABELS = {
   es: { "01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo","06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre","10":"Octubre","11":"Noviembre","12":"Diciembre" },
   en: { "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June","07":"July","08":"August","09":"September","10":"October","11":"November","12":"December" },
 };
+function monthFromYM(ym?: string) {
+  if (!ym) return null;
+  const m = ym.split("-")[1];
+  return m && m.padStart(2, "0");
+}
 function localizeTitle(spec: ChartSpec, lang: "es" | "en"): string {
   const p = spec.params || {};
   switch (spec.intent) {
@@ -96,13 +113,14 @@ function localizeTitle(spec: ChartSpec, lang: "es" | "en"): string {
         : `Top ${p.topN ?? 5} canales (mes activo)`;
     case "ventas_vs_gastos_dos_meses": {
       const [a, b] = Array.isArray(p.months) ? p.months : [];
-      const L = MONTH_LABELS[lang];
-      const A = L?.[String(a).padStart(2, "0")] ?? a ?? "?";
-      const B = L?.[String(b).padStart(2, "0")] ?? b ?? "?";
-      return lang === "en"
-        ? `Sales vs Expenses (${A} vs ${B})`
-        : `Ventas vs Gastos (${A} vs ${B})`;
+      const A = MONTH_LABELS[lang][monthFromYM(a) ?? ""] ?? a ?? "?";
+      const B = MONTH_LABELS[lang][monthFromYM(b) ?? ""] ?? b ?? "?";
+      return lang === "en" ? `Sales vs Expenses (${A} vs ${B})` : `Ventas vs Gastos (${A} vs ${B})`;
     }
+    case "nuevos_clientes_n_meses":
+      return lang === "en"
+        ? `New customers (last ${p.months ?? 6} months)`
+        : `Nuevos clientes (últimos ${p.months ?? 6} meses)`;
     default:
       return spec.title;
   }
@@ -132,14 +150,20 @@ export default function App() {
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const lastUserRef = useRef<string>("");
 
-  /* Cancelación */
+  /* NUEVO: Ask (SQL/NQL) */
+  const [askText, setAskText] = useState<string>("");
+  const [askLoading, setAskLoading] = useState<boolean>(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  const [askResult, setAskResult] = useState<AskResponse | null>(null);
+
+  /* Cancelación chat */
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  /* Gráficos generados */
+  /* Gráficos generados por /api/chat */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
 
-  /* Auto-scroll */
+  /* Auto-scroll chat */
   const chatRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatRef.current;
@@ -147,7 +171,7 @@ export default function App() {
     queueMicrotask(() => { el.scrollTop = el.scrollHeight; });
   }, [messages, isTyping, lang]);
 
-  /* Hidratar/guardar */
+  /* Hidratar/guardar chat y charts */
   useEffect(() => {
     try {
       const m = localStorage.getItem(LS_MESSAGES);
@@ -169,16 +193,27 @@ export default function App() {
   const { ventas, clientes, serieBar, kpis, loading, err } =
     (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
 
-  /* Meses disponibles / mes activo */
-  const mesesDisponibles = useMemo<string[]>(() => {
-    const set = new Set<string>();
-    ventas?.forEach((v) => v?.fecha && set.add(ymKey(v.fecha)));
-    clientes?.forEach((c) => c?.fecha && set.add(ymKey(c.fecha)));
-    if (set.size === 0 && Array.isArray(serieBar) && serieBar.length) {
-      serieBar.forEach((p) => p?.mes && set.add(p.mes));
+  /* ===== Disponibilidad real de meses ===== */
+  const ventasMonths = useMemo<string[]>(() => {
+    if (Array.isArray(serieBar) && serieBar.length) {
+      return Array.from(new Set(serieBar.map(p => p.mes))).sort();
     }
-    return Array.from(set).sort();
-  }, [ventas, clientes, serieBar]);
+    const s = new Set<string>();
+    ventas?.forEach(v => v?.fecha && s.add(ymKey(v.fecha)));
+    return Array.from(s).sort();
+  }, [serieBar, ventas]);
+
+  const clientesMonths = useMemo<string[]>(() => {
+    const s = new Set<string>();
+    clientes?.forEach(c => c?.fecha && s.add(ymKey(c.fecha)));
+    return Array.from(s).sort();
+  }, [clientes]);
+
+  /* Meses “globales” (para selector) */
+  const mesesDisponibles = useMemo<string[]>(() => {
+    const s = new Set<string>([...ventasMonths, ...clientesMonths]);
+    return Array.from(s).sort();
+  }, [ventasMonths, clientesMonths]);
 
   const [mesSel, setMesSel] = useState<string | null>(null);
   useEffect(() => {
@@ -186,7 +221,7 @@ export default function App() {
   }, [mesesDisponibles, mesSel]);
   const mesActivo = mesSel || (mesesDisponibles.length ? (mesesDisponibles.at(-1) as string) : null);
 
-  /* Enviar */
+  /* Enviar Chat */
   const enviar = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text) return;
@@ -205,7 +240,7 @@ export default function App() {
     abortRef.current = new AbortController();
 
     setIsTyping(true);
-    const ai = await chatWithAI(next, mesActivo, mesesDisponibles, lang, 4, abortRef.current.signal);
+    const ai = await chatWithAI(next, mesActivo, ventasMonths, clientesMonths, lang, 4, abortRef.current.signal);
     setIsTyping(false);
 
     if (ai) {
@@ -213,7 +248,7 @@ export default function App() {
       if (ai.specs?.length) {
         setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8));
       } else {
-        const localSpec = parsePromptToSpec(text); // parser local
+        const localSpec = parsePromptToSpec(text);
         if (localSpec) {
           setGenerated((prev) => [localSpec, ...prev].slice(0, 8));
           setMessages((p) => [
@@ -241,10 +276,22 @@ export default function App() {
   /* Acciones chat */
   const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
   const onDetener = () => { abortRef.current?.abort(); setIsTyping(false); };
-  const onClearChat = () => {
-    setMessages([{ role: "assistant", content: t(lang, "chat.greeting") }]);
-    setGenerated([]);
-  };
+  const onClearChat = () => { setMessages([{ role: "assistant", content: t(lang, "chat.greeting") }]); setGenerated([]); };
+
+  /* Ejecutar ASK */
+  async function runAsk() {
+    if (!askText.trim()) return;
+    setAskLoading(true); setAskError(null);
+    try {
+      const res = await askLLM(askText.trim(), lang, { ventasMonths, clientesMonths });
+      setAskResult(res);
+    } catch (e: any) {
+      setAskError(e.message || String(e));
+    } finally {
+      setAskLoading(false);
+    }
+  }
+  function clearAsk() { setAskResult(null); setAskText(""); setAskError(null); }
 
   /* Tooltip Recharts */
   const tooltipStyle: React.CSSProperties = {
@@ -336,7 +383,7 @@ export default function App() {
       {/* Layout principal */}
       <div className="mx-auto max-w-7xl">
         <div className="flex">
-          {/* Sidebar / Chat */}
+          {/* Sidebar / Chat + Ask */}
           <aside
             className={`
               relative shrink-0 transition-all duration-300 ease-out
@@ -366,7 +413,7 @@ export default function App() {
               <div className="p-4 h-full overflow-y-auto no-scrollbar">
                 <h2 className="text-base font-medium text-zinc-700 dark:text-zinc-200">{t(lang, "chat.title")}</h2>
 
-                {/* Input + acciones */}
+                {/* Input + acciones (Chat) */}
                 <div className="mt-3 flex gap-2">
                   <textarea
                     className="flex-1 min-h-[40px] max-h-[120px] rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 outline-none resize-y"
@@ -385,7 +432,7 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Acciones */}
+                {/* Acciones Chat */}
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     onClick={onRegenerar}
@@ -412,35 +459,8 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Ejemplos */}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {SUGGESTIONS.map((q) => (
-                    <button key={q} onClick={() => enviar(q)}
-                      className="text-xs px-2 py-1 rounded-full border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                      {q}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Mes */}
-                <div className="mt-4">
-                  <label className="text-xs text-zinc-500 dark:text-zinc-400">{t(lang, "month.filter")}</label>
-                  <select
-                    className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-zinc-900 dark:text-zinc-100 px-3 py-2"
-                    value={mesActivo || ""}
-                    onChange={(e) => setMesSel(e.target.value)}
-                    disabled={!mesesDisponibles.length}
-                  >
-                    {mesesDisponibles.length === 0 ? (
-                      <option value="">{t(lang, "loading")}</option>
-                    ) : (
-                      mesesDisponibles.map((m) => <option key={m} value={m}>{m}</option>)
-                    )}
-                  </select>
-                </div>
-
-                {/* Mensajes */}
-                <div ref={chatRef} className="mt-4 px-1 space-y-2 overflow-y-auto no-scrollbar max-h-[48vh]">
+                {/* Mensajes del Chat */}
+                <div ref={chatRef} className="mt-3 px-1 space-y-2 overflow-y-auto no-scrollbar max-h-[36vh]">
                   {messages.map((m, i) => (
                     <div key={`${i}-${m.role}`}
                       className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm ${
@@ -456,6 +476,45 @@ export default function App() {
                       <span className="animate-bounce">●</span>
                       <span className="animate-bounce [animation-delay:150ms]">●</span>
                       <span className="animate-bounce [animation-delay:300ms]">●</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* ─────────────────────────────
+                    ASK (pregunta libre con SQL)
+                   ───────────────────────────── */}
+                <div className="mt-6 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+                  <div className="text-sm font-medium mb-2">
+                    {lang==="en" ? "Ask (any data question)" : "Ask (pregunta libre)"}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      className="flex-1 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm bg-white dark:bg-zinc-900"
+                      placeholder={lang==="en" ? "e.g., most profitable customers" : "ej., clientes más rentables"}
+                      value={askText}
+                      onChange={(e)=>setAskText(e.target.value)}
+                      onKeyDown={(e)=>{ if(e.key==="Enter") runAsk(); }}
+                    />
+                    <button
+                      onClick={runAsk}
+                      disabled={askLoading}
+                      className="rounded-lg px-3 py-2 text-sm bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 disabled:opacity-50"
+                    >
+                      {askLoading ? (lang==="en"?"Running...":"Ejecutando...") : "Ask"}
+                    </button>
+                    {askResult && (
+                      <button
+                        onClick={clearAsk}
+                        className="rounded-lg px-3 py-2 text-sm border border-zinc-300/40 dark:border-zinc-700"
+                      >
+                        {lang==="en" ? "Clear" : "Limpiar"}
+                      </button>
+                    )}
+                  </div>
+                  {askError && <div className="mt-2 text-xs text-rose-600">{askError}</div>}
+                  {askResult?.askBack && (
+                    <div className="mt-2 text-xs text-zinc-500">
+                      <strong>{lang==="en"?"Clarify:":"Aclarar:"}</strong> {askResult.askBack}
                     </div>
                   )}
                 </div>
@@ -512,6 +571,48 @@ export default function App() {
                 )}
               </ChartCard>
 
+              {/* ⇩ RESULTADOS DE ASK (gráfico + tabla + SQL) */}
+              {askResult && (
+                <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium text-zinc-800 dark:text-zinc-200">
+                      {askResult.chartSpec?.title || (lang==="en"?"Generated chart":"Gráfico generado")}
+                    </div>
+                    <div className="text-xs text-zinc-500">{askResult.explanation}</div>
+                  </div>
+
+                  <div className="mt-3">
+                    <GenericResultChart
+                      fields={askResult.fields}
+                      rows={askResult.rows}
+                      spec={askResult.chartSpec}
+                      height={320}
+                    />
+                  </div>
+
+                  <details className="mt-3 rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                    <summary className="text-sm cursor-pointer">{lang==="en"?"Show details":"Ver detalles"}</summary>
+                    <div className="mt-2">
+                      <div className="text-xs font-mono whitespace-pre-wrap break-words">{askResult.sql}</div>
+                      <div className="mt-3 overflow-auto">
+                        <table className="min-w-full text-xs">
+                          <thead>
+                            <tr>{askResult.fields.map(f => <th key={f} className="text-left pr-4 py-1">{f}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {askResult.rows.slice(0,100).map((r,i)=>(
+                              <tr key={i}>
+                                {askResult.fields.map(f => <td key={f} className="pr-4 py-1">{String(r[f])}</td>)}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              )}
+
               {/* Insights */}
               <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                 <div className="font-medium text-zinc-800 dark:text-zinc-200">{t(lang, "insights.title")}</div>
@@ -522,7 +623,7 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Gráficos IA */}
+              {/* Gráficos IA (del chat) */}
               {generated.length > 0 && (
                 <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                   <div className="flex items-center justify-between">
@@ -538,7 +639,14 @@ export default function App() {
                     {generated.map((spec) => (
                       <div key={spec.id || Math.random().toString(36).slice(2)} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
                         <div className="text-sm font-medium mb-2">{localizeTitle(spec, lang)}</div>
-                        <DynamicChart spec={spec} ventas={ventas} serieBar={serieBar} mesActivo={mesActivo} lang={lang} />
+                        <DynamicChart
+                          spec={spec}
+                          ventas={ventas}
+                          clientes={clientes}
+                          serieBar={serieBar}
+                          mesActivo={mesActivo}
+                          lang={lang}
+                        />
                         {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
                       </div>
                     ))}

@@ -1,5 +1,4 @@
 // backend/src/server.ts
-
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -9,41 +8,33 @@ import rateLimit from "@fastify/rate-limit";
 import { ENV } from "./env.js";
 import { connectionsRoutes } from "./routes/connections.js";
 import { chatRoutes } from "./routes/chat.js";
+import { askRoutes } from "./routes/ask.js"; // <— NUEVO
 
 const app = Fastify({ logger: true });
 
-// ── Plugins básicos
+// Plugins
 await app.register(sensible);
 await app.register(helmet, { global: true });
-await app.register(cors, {
-  origin: ENV.CORS_ORIGIN,
-  credentials: true,
-});
-await app.register(rateLimit, {
-  max: 200,
-  timeWindow: "1 minute",
-});
+await app.register(cors, { origin: ENV.CORS_ORIGIN, credentials: true });
+await app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 
-// ── Healthchecks
+// Health
 app.get("/health", async () => ({ ok: true }));
-
-// Endpoint raíz: útil para diagnóstico rápido
 app.get("/", async () => ({
   service: "mikpi-backend",
   ok: true,
   node: process.versions.node,
-  openaiKeyLen: (ENV.OPENAI_API_KEY || "").length, // 0 = no llega la clave
+  openaiKeyLen: (ENV.OPENAI_API_KEY || "").length,
   hasDB: Boolean(ENV.DATABASE_URL),
 }));
 
-// ── Rutas de negocio
+// Rutas
 await app.register(connectionsRoutes);
 await app.register(chatRoutes);
+await app.register(askRoutes); // <— NUEVO
 
-// ── Arranque con log de saneo de entorno
 const keyLen = (ENV.OPENAI_API_KEY || "").length;
 app.log.info({ msg: "ENV sanity", openaiKeyLen: keyLen, corsOrigin: ENV.CORS_ORIGIN });
 
-await app
-  .listen({ port: ENV.PORT, host: "0.0.0.0" })
+await app.listen({ port: ENV.PORT, host: "0.0.0.0" })
   .then(() => app.log.info(`API listening on :${ENV.PORT}`));
