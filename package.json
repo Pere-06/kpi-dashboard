@@ -8,11 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "vercel-build": "vite build"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.43.1",
-    "@clerk/clerk-sdk-node": "^5.1.6",
     "@clerk/localizations": "^3.24.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.23.12",
