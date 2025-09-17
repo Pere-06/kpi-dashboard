@@ -1,0 +1,11 @@
+# Ignora el backend y cosas de servidor en Vercel
+backend/
+prisma/
+*.sql
+*.sh
+
+# Archivos locales que no hacen falta en el build
+.env
+.env.local
+.env.*.local
+node_modules/
