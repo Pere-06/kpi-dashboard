@@ -17,8 +17,8 @@ import { useLang } from "./hooks/useLang";
 import SettingsDrawer from "./components/SettingsDrawer";
 import { API_BASE } from "./config";
 
-// 🔹 NUEVO: Ask (SQL/NQL)
-import { askLLM, type AskResponse } from "./ai/askClient";
+// ✅ PATH CORRECTO (api/askClient)
+import { askLLM, type AskResponse } from "./api/askClient";
 import GenericResultChart from "./components/GenericResultChart";
 
 /* ===== Tipos locales ===== */
@@ -44,8 +44,7 @@ const LS_SIDEBAR = "mikpi:sidebar-collapsed";
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
-  ventasMonths: string[],
-  clientesMonths: string[],
+  mesesDisponibles: string[],
   lang: Lang,
   maxCharts: number,
   signal?: AbortSignal
@@ -61,14 +60,7 @@ async function chatWithAI(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
-      body: JSON.stringify({
-        messages: history,
-        mesActivo,
-        ventasMonths,
-        clientesMonths,
-        lang,
-        maxCharts,
-      }),
+      body: JSON.stringify({ messages: history, mesActivo, mesesDisponibles, lang, maxCharts }),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
@@ -84,7 +76,7 @@ async function chatWithAI(
   }
 }
 
-/* ===== Localización de títulos ===== */
+/* ===== Localización de títulos (para specs) ===== */
 const MONTH_LABELS = {
   es: { "01":"Enero","02":"Febrero","03":"Marzo","04":"Abril","05":"Mayo","06":"Junio","07":"Julio","08":"Agosto","09":"Septiembre","10":"Octubre","11":"Noviembre","12":"Diciembre" },
   en: { "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June","07":"July","08":"August","09":"September","10":"October","11":"November","12":"December" },
@@ -150,7 +142,7 @@ export default function App() {
   const [isTyping, setIsTyping] = useState<boolean>(false);
   const lastUserRef = useRef<string>("");
 
-  /* NUEVO: Ask (SQL/NQL) */
+  /* ASK (SQL/NQL) */
   const [askText, setAskText] = useState<string>("");
   const [askLoading, setAskLoading] = useState<boolean>(false);
   const [askError, setAskError] = useState<string | null>(null);
@@ -193,27 +185,14 @@ export default function App() {
   const { ventas, clientes, serieBar, kpis, loading, err } =
     (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
 
-  /* ===== Disponibilidad real de meses ===== */
-  const ventasMonths = useMemo<string[]>(() => {
-    if (Array.isArray(serieBar) && serieBar.length) {
-      return Array.from(new Set(serieBar.map(p => p.mes))).sort();
-    }
+  /* ===== Meses disponibles (para filtros y para /api/chat) ===== */
+  const mesesDisponibles = useMemo<string[]>(() => {
     const s = new Set<string>();
     ventas?.forEach(v => v?.fecha && s.add(ymKey(v.fecha)));
-    return Array.from(s).sort();
-  }, [serieBar, ventas]);
-
-  const clientesMonths = useMemo<string[]>(() => {
-    const s = new Set<string>();
     clientes?.forEach(c => c?.fecha && s.add(ymKey(c.fecha)));
+    if (Array.isArray(serieBar) && serieBar.length) serieBar.forEach(p => p?.mes && s.add(p.mes));
     return Array.from(s).sort();
-  }, [clientes]);
-
-  /* Meses “globales” (para selector) */
-  const mesesDisponibles = useMemo<string[]>(() => {
-    const s = new Set<string>([...ventasMonths, ...clientesMonths]);
-    return Array.from(s).sort();
-  }, [ventasMonths, clientesMonths]);
+  }, [ventas, clientes, serieBar]);
 
   const [mesSel, setMesSel] = useState<string | null>(null);
   useEffect(() => {
@@ -240,7 +219,7 @@ export default function App() {
     abortRef.current = new AbortController();
 
     setIsTyping(true);
-    const ai = await chatWithAI(next, mesActivo, ventasMonths, clientesMonths, lang, 4, abortRef.current.signal);
+    const ai = await chatWithAI(next, mesActivo, mesesDisponibles, lang, 4, abortRef.current.signal);
     setIsTyping(false);
 
     if (ai) {
@@ -283,10 +262,13 @@ export default function App() {
     if (!askText.trim()) return;
     setAskLoading(true); setAskError(null);
     try {
-      const res = await askLLM(askText.trim(), lang, { ventasMonths, clientesMonths });
+      const res = await askLLM(askText.trim(), lang, {
+        ventasMonths: Array.from(new Set(serieBar?.map(p => p.mes) ?? [])),
+        clientesMonths: Array.from(new Set(clientes?.map(c => c?.fecha && ymKey(c.fecha)).filter(Boolean) as string[])),
+      });
       setAskResult(res);
     } catch (e: any) {
-      setAskError(e.message || String(e));
+      setAskError(e?.message || String(e));
     } finally {
       setAskLoading(false);
     }
@@ -480,9 +462,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* ─────────────────────────────
-                    ASK (pregunta libre con SQL)
-                   ───────────────────────────── */}
+                {/* ASK (SQL/NQL) */}
                 <div className="mt-6 border-t border-zinc-200 dark:border-zinc-800 pt-4">
                   <div className="text-sm font-medium mb-2">
                     {lang==="en" ? "Ask (any data question)" : "Ask (pregunta libre)"}
@@ -571,7 +551,7 @@ export default function App() {
                 )}
               </ChartCard>
 
-              {/* ⇩ RESULTADOS DE ASK (gráfico + tabla + SQL) */}
+              {/* Resultados ASK */}
               {askResult && (
                 <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                   <div className="flex items-center justify-between">
@@ -642,7 +622,6 @@ export default function App() {
                         <DynamicChart
                           spec={spec}
                           ventas={ventas}
-                          clientes={clientes}
                           serieBar={serieBar}
                           mesActivo={mesActivo}
                           lang={lang}
