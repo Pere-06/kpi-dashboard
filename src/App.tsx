@@ -15,11 +15,44 @@ import type { ChartSpec } from "./types/chart";
 import { t, type Lang } from "./i18n";
 import { useLang } from "./hooks/useLang";
 import SettingsDrawer from "./components/SettingsDrawer";
-import { API_BASE } from "./config";
+import { API_BASE as API_BASE_RAW } from "./config";
 
-// ✅ PATH CORRECTO (api/askClient)
+// ✅ ASK (SQL/NQL) existente
 import { askLLM, type AskResponse } from "./api/askClient";
 import GenericResultChart from "./components/GenericResultChart";
+
+/* =============================================================================
+   Helper API local (arregla el 'Unexpected token <' y normaliza API_BASE)
+============================================================================= */
+const API_BASE = (API_BASE_RAW || "/api").replace(/\/+$/, ""); // sin barra final
+function joinApi(path: string) {
+  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
+function isJsonCT(ct: string | null) {
+  return !!ct && ct.toLowerCase().includes("application/json");
+}
+function safeParseJSON(s: string) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+async function apiPOST<T = any>(path: string, body: unknown, init?: RequestInit): Promise<T> {
+  const url = joinApi(path);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    credentials: "include",
+    body: JSON.stringify(body ?? {}),
+    ...init,
+  });
+  const ct = res.headers.get("content-type");
+  const text = await res.text();
+
+  if (!res.ok) {
+    const json = isJsonCT(ct) ? safeParseJSON(text) : null;
+    const msg = (json && (json.message || json.error)) || text || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return (isJsonCT(ct) ? (safeParseJSON(text) as T) : ({ ok: true, text } as any));
+}
 
 /* ===== Tipos locales ===== */
 type VentasRow = { fecha?: Date | null; canal?: string | null; ventas?: number | null; gastos?: number | null; mes?: string | null; };
@@ -40,7 +73,7 @@ const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
 const LS_SIDEBAR = "mikpi:sidebar-collapsed";
 
-/* ===== API chat (helper local) ===== */
+/* ===== API chat (usa wrapper robusto) ===== */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
@@ -49,26 +82,23 @@ async function chatWithAI(
   maxCharts: number,
   signal?: AbortSignal
 ): Promise<{ assistant: string; specs: ChartSpec[] } | null> {
-  const endpoint = `${API_BASE ? API_BASE : ""}/api/chat`;
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
   const timeout = setTimeout(() => controller.abort(), 25000);
 
   try {
-    const r = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({ messages: history, mesActivo, mesesDisponibles, lang, maxCharts }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
+    const data = await apiPOST<{ reply?: string; specs?: ChartSpec[] }>(
+      "/chat",
+      { messages: history, mesActivo, mesesDisponibles, lang, maxCharts },
+      { signal: controller.signal }
+    );
     return {
-      assistant: typeof data.reply === "string" ? data.reply : (lang === "en" ? "Ok." : "Vale."),
-      specs: Array.isArray(data.specs) ? (data.specs as ChartSpec[]) : [],
+      assistant: typeof data?.reply === "string" ? data.reply : (lang === "en" ? "Ok." : "Vale."),
+      specs: Array.isArray(data?.specs) ? data.specs : [],
     };
-  } catch {
+  } catch (e) {
+    console.error("[/chat] error:", e);
     return null;
   } finally {
     clearTimeout(timeout);
@@ -152,7 +182,7 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  /* Gráficos generados por /api/chat */
+  /* Gráficos generados por /chat */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
 
   /* Auto-scroll chat */
@@ -168,13 +198,13 @@ export default function App() {
     try {
       const m = localStorage.getItem(LS_MESSAGES);
       if (m) {
-        const parsed = JSON.parse(m);
-        if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
+        const parsed = safeParseJSON(m);
+        if (Array.isArray(parsed) && parsed.length) setMessages(parsed as ChatMessage[]);
       }
       const g = localStorage.getItem(LS_CHARTS);
       if (g) {
-        const parsed = JSON.parse(g);
-        if (Array.isArray(parsed)) setGenerated(parsed);
+        const parsed = safeParseJSON(g);
+        if (Array.isArray(parsed)) setGenerated(parsed as ChartSpec[]);
       }
     } catch {}
   }, []);
@@ -185,7 +215,7 @@ export default function App() {
   const { ventas, clientes, serieBar, kpis, loading, err } =
     (useSheetData() as UseSheetDataReturn) || ({} as UseSheetDataReturn);
 
-  /* ===== Meses disponibles (para filtros y para /api/chat) ===== */
+  /* ===== Meses disponibles ===== */
   const mesesDisponibles = useMemo<string[]>(() => {
     const s = new Set<string>();
     ventas?.forEach(v => v?.fecha && s.add(ymKey(v.fecha)));
@@ -434,7 +464,7 @@ export default function App() {
                   </button>
                   <button
                     onClick={onClearChat}
-                    className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    className="text-xs px-2 py-1 rounded-lg border border-zinc-300/40 dark:border-zinc-700"
                     title={lang === "en" ? "Clear chat" : "Limpiar chat"}
                   >
                     🧹 {lang === "en" ? "Clear chat" : "Limpiar chat"}
