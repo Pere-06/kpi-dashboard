@@ -8,7 +8,7 @@ import {
 import KpiCard from "./components/KpiCard";
 import ChartCard from "./components/ChartCard";
 import { useDarkMode } from "./hooks/useDarkMode";
-import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
+import { SignedIn, SignedOut, SignInButton, UserButton, useAuth } from "@clerk/clerk-react";
 import DynamicChart from "./components/DynamicChart";
 import { parsePromptToSpec } from "./ai/parsePrompt";
 import type { ChartSpec } from "./types/chart";
@@ -22,9 +22,9 @@ import { askLLM, type AskResponse } from "./api/askClient";
 import GenericResultChart from "./components/GenericResultChart";
 
 /* =============================================================================
-   Helper API local (arregla el 'Unexpected token <' y normaliza API_BASE)
+   Helper API local (Content-Type JSON + normaliza API_BASE)
 ============================================================================= */
-const API_BASE = (API_BASE_RAW || "/api").replace(/\/+$/, ""); // sin barra final
+const API_BASE = (API_BASE_RAW || "/api").replace(/\/+$/, "");
 function joinApi(path: string) {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
@@ -45,7 +45,6 @@ async function apiPOST<T = any>(path: string, body: unknown, init?: RequestInit)
   });
   const ct = res.headers.get("content-type");
   const text = await res.text();
-
   if (!res.ok) {
     const json = isJsonCT(ct) ? safeParseJSON(text) : null;
     const msg = (json && (json.message || json.error)) || text || `HTTP ${res.status}`;
@@ -62,6 +61,9 @@ type Kpis = { ventasMes: number; deltaVentas: number; nuevosMes: number; deltaNu
 type UseSheetDataReturn = { ventas: VentasRow[]; clientes: ClientesRow[]; serieBar: SerieBarPoint[]; kpis: Kpis | null; loading: boolean; err: Error | string | null; };
 type ChatMessage = { role: "user" | "assistant"; content: string };
 
+/* ===== Para gráficos de DB devueltos por /api/chat ===== */
+type DBChart = { spec: any; fields: string[]; rows: any[] };
+
 /* ===== Utils ===== */
 const euro = (n: number = 0) => n.toLocaleString("es-ES", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 const pct = (n: number = 0) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
@@ -73,29 +75,31 @@ const LS_MESSAGES = "mikpi:messages";
 const LS_CHARTS = "mikpi:generated";
 const LS_SIDEBAR = "mikpi:sidebar-collapsed";
 
-/* ===== API chat (usa wrapper robusto) ===== */
+/* ===== API chat (ahora soporta Authorization y charts de DB) ===== */
 async function chatWithAI(
   history: ChatMessage[],
   mesActivo: string | null,
   mesesDisponibles: string[],
   lang: Lang,
   maxCharts: number,
+  authToken?: string,
   signal?: AbortSignal
-): Promise<{ assistant: string; specs: ChartSpec[] } | null> {
+): Promise<{ assistant: string; specs: ChartSpec[]; charts: DBChart[] } | null> {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
   const timeout = setTimeout(() => controller.abort(), 25000);
 
   try {
-    const data = await apiPOST<{ reply?: string; specs?: ChartSpec[] }>(
+    const data = await apiPOST<{ reply?: string; specs?: ChartSpec[]; charts?: DBChart[] }>(
       "/chat",
       { messages: history, mesActivo, mesesDisponibles, lang, maxCharts },
-      { signal: controller.signal }
+      { signal: controller.signal, headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined }
     );
     return {
       assistant: typeof data?.reply === "string" ? data.reply : (lang === "en" ? "Ok." : "Vale."),
       specs: Array.isArray(data?.specs) ? data.specs : [],
+      charts: Array.isArray(data?.charts) ? data.charts : [],
     };
   } catch (e) {
     console.error("[/chat] error:", e);
@@ -149,6 +153,9 @@ function localizeTitle(spec: ChartSpec, lang: "es" | "en"): string {
 }
 
 export default function App() {
+  /* Auth (para enviar token a /api) */
+  const { getToken, isSignedIn } = useAuth();
+
   /* Tema e idioma */
   const dm = (useDarkMode() as { theme?: "dark" | "light"; toggle?: () => void }) || {};
   const theme = dm.theme === "dark" ? "dark" : "light";
@@ -182,8 +189,10 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  /* Gráficos generados por /chat */
+  /* Gráficos generados por /chat (especificaciones locales) */
   const [generated, setGenerated] = useState<ChartSpec[]>([]);
+  /* NUEVO: Gráficos con datos reales de la DB devueltos por /api/chat */
+  const [dbCharts, setDbCharts] = useState<DBChart[]>([]);
 
   /* Auto-scroll chat */
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -245,15 +254,31 @@ export default function App() {
       return;
     }
 
+    // Token de Clerk (si no hay, avisamos)
+    const token = await getToken().catch(() => null);
+    if (!token && isSignedIn === false) {
+      setMessages((p) => [...p, { role: "assistant", content: lang === "en"
+        ? "Please sign in to query your data sources."
+        : "Inicia sesión para consultar tus fuentes de datos." }]);
+      return;
+    }
+
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
     setIsTyping(true);
-    const ai = await chatWithAI(next, mesActivo, mesesDisponibles, lang, 4, abortRef.current.signal);
+    const ai = await chatWithAI(next, mesActivo, mesesDisponibles, lang, 4, token || undefined, abortRef.current.signal);
     setIsTyping(false);
 
     if (ai) {
       setMessages((p) => [...p, { role: "assistant" as const, content: ai.assistant || (lang === "en" ? "Got it." : "Entendido.") }]);
+
+      // 1) Charts con datos reales de la DB del tenant
+      if (ai.charts?.length) {
+        setDbCharts(prev => [...ai.charts, ...prev].slice(0, 6));
+      }
+
+      // 2) Specs locales (fallback/extra)
       if (ai.specs?.length) {
         setGenerated((prev) => [...ai.specs, ...prev].slice(0, 8));
       } else {
@@ -269,7 +294,7 @@ export default function App() {
       return;
     }
 
-    // Fallback total
+    // Fallback total sin /api/chat
     const localSpec = parsePromptToSpec(text);
     if (localSpec) {
       setGenerated((prev) => [localSpec, ...prev].slice(0, 8));
@@ -285,7 +310,7 @@ export default function App() {
   /* Acciones chat */
   const onRegenerar = () => { const last = lastUserRef.current; if (last) enviar(last); };
   const onDetener = () => { abortRef.current?.abort(); setIsTyping(false); };
-  const onClearChat = () => { setMessages([{ role: "assistant", content: t(lang, "chat.greeting") }]); setGenerated([]); };
+  const onClearChat = () => { setMessages([{ role: "assistant", content: t(lang, "chat.greeting") }]); setGenerated([]); setDbCharts([]); };
 
   /* Ejecutar ASK */
   async function runAsk() {
@@ -314,7 +339,7 @@ export default function App() {
     fontSize: "0.875rem",
   };
 
-  /* Sugerencias quick */
+  /* Sugerencias quick (por si quieres mostrarlas) */
   const SUGGESTIONS = [
     t(lang, "chat.example.1"),
     t(lang, "chat.example.2"),
@@ -633,7 +658,7 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Gráficos IA (del chat) */}
+              {/* Gráficos IA (del chat) - specs locales */}
               {generated.length > 0 && (
                 <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
                   <div className="flex items-center justify-between">
@@ -657,6 +682,23 @@ export default function App() {
                           lang={lang}
                         />
                         {spec.notes && <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{spec.notes}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* NUEVO: Gráficos con datos reales de tu base (del mismo chat) */}
+              {dbCharts.length > 0 && (
+                <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+                  <div className="font-medium text-zinc-800 dark:text-zinc-200">
+                    {lang==="en" ? "Charts from your database" : "Gráficos con tus datos"}
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {dbCharts.map((c, i) => (
+                      <div key={i} className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3">
+                        <div className="text-sm font-medium mb-2">{c.spec?.title || "Chart"}</div>
+                        <GenericResultChart fields={c.fields} rows={c.rows} spec={c.spec} height={320} />
                       </div>
                     ))}
                   </div>
